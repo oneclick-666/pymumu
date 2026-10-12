@@ -8,7 +8,6 @@ Win32 APIs, keeping the control path independent from ADB.
 from __future__ import annotations
 
 import ctypes
-import os
 import sys
 import threading
 import time
@@ -287,19 +286,32 @@ def _send_keyboard_events(user32, events) -> None:
 
 def _send_ctrl_v(user32) -> None:
     input_type, keyboard_type, input_keyboard, keyeventf_keyup = _keyboard_types()
-    vk_control = 0x11
-    vk_v = 0x56
+    keyeventf_scancode = 0x0008
+    scan_left_control = 0x1D
+    scan_v = 0x2F
 
     events = (
-        input_type(type=input_keyboard, ki=keyboard_type(wVk=vk_control)),
-        input_type(type=input_keyboard, ki=keyboard_type(wVk=vk_v)),
         input_type(
             type=input_keyboard,
-            ki=keyboard_type(wVk=vk_v, dwFlags=keyeventf_keyup),
+            ki=keyboard_type(wScan=scan_left_control, dwFlags=keyeventf_scancode),
         ),
         input_type(
             type=input_keyboard,
-            ki=keyboard_type(wVk=vk_control, dwFlags=keyeventf_keyup),
+            ki=keyboard_type(wScan=scan_v, dwFlags=keyeventf_scancode),
+        ),
+        input_type(
+            type=input_keyboard,
+            ki=keyboard_type(
+                wScan=scan_v,
+                dwFlags=keyeventf_scancode | keyeventf_keyup,
+            ),
+        ),
+        input_type(
+            type=input_keyboard,
+            ki=keyboard_type(
+                wScan=scan_left_control,
+                dwFlags=keyeventf_scancode | keyeventf_keyup,
+            ),
         ),
     )
     # Send the chord as distinct events. Some MuMu render versions coalesce a
@@ -350,39 +362,6 @@ def _send_physical_text(user32, text: str) -> None:
         _send_keyboard_events(user32, (input_type * len(event_values))(*event_values))
 
 
-def _send_unicode_text(user32, text: str) -> None:
-    """Send UTF-16 keyboard packets without using an IME or the clipboard."""
-
-    input_type, keyboard_type, input_keyboard, keyeventf_keyup = _keyboard_types()
-    keyeventf_unicode = 0x0004
-    # SendInput's Unicode mode consumes UTF-16 code units. Encoding explicitly
-    # also handles non-BMP characters as the required surrogate pair.
-    encoded = text.encode("utf-16-le")
-    code_units = [
-        int.from_bytes(encoded[offset : offset + 2], "little")
-        for offset in range(0, len(encoded), 2)
-    ]
-    event_values = []
-    for code_unit in code_units:
-        event_values.extend(
-            (
-                input_type(
-                    type=input_keyboard,
-                    ki=keyboard_type(wScan=code_unit, dwFlags=keyeventf_unicode),
-                ),
-                input_type(
-                    type=input_keyboard,
-                    ki=keyboard_type(
-                        wScan=code_unit,
-                        dwFlags=keyeventf_unicode | keyeventf_keyup,
-                    ),
-                ),
-            )
-        )
-    if event_values:
-        _send_keyboard_events(user32, (input_type * len(event_values))(*event_values))
-
-
 def paste_text(window_handle: int, text: str) -> dict[str, Any]:
     """Type text into one MuMu instance using Win32 only."""
 
@@ -402,22 +381,11 @@ def paste_text(window_handle: int, text: str) -> dict[str, Any]:
             _send_physical_text(user32, text)
             method = "win32_physical_keyboard"
         else:
-            unicode_mode = (
-                os.getenv("PYMUMU_UNICODE_INPUT_MODE", "clipboard").strip().lower()
-            )
-            if unicode_mode == "keyboard":
-                _send_unicode_text(user32, text)
-                method = "win32_unicode_keyboard"
-            else:
-                # MuMu copies the host clipboard into Android asynchronously.
-                # Keep this text in the clipboard: restoring it immediately can
-                # race that synchronization and result in a successful Ctrl+V
-                # with no text appearing in the Android input field.
-                _write_clipboard_text(user32, kernel32, text)
-                time.sleep(0.35)
-                _send_ctrl_v(user32)
-                time.sleep(1.0)
-                method = "win32_persistent_clipboard"
+            _write_clipboard_text(user32, kernel32, text)
+            time.sleep(0.35)
+            _send_ctrl_v(user32)
+            time.sleep(1.0)
+            method = "win32_scancode_paste"
 
     return {
         "method": method,

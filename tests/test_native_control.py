@@ -93,7 +93,7 @@ def test_ascii_text_uses_physical_keyboard(monkeypatch):
     }
 
 
-def test_unicode_text_uses_persistent_clipboard(monkeypatch):
+def test_unicode_text_uses_scancode_paste(monkeypatch):
     user32, kernel32 = object(), object()
     calls = []
     monkeypatch.setattr(windows_input, "_windows_api", lambda: (user32, kernel32))
@@ -113,31 +113,31 @@ def test_unicode_text_uses_persistent_clipboard(monkeypatch):
     monkeypatch.setattr(
         windows_input, "_send_ctrl_v", lambda value: calls.append(value)
     )
-    monkeypatch.delenv("PYMUMU_UNICODE_INPUT_MODE", raising=False)
-
     result = windows_input.paste_text(123, "随风而动")
 
     assert calls == [(user32, kernel32, "随风而动"), user32]
-    assert result["method"] == "win32_persistent_clipboard"
+    assert result["method"] == "win32_scancode_paste"
 
 
-def test_unicode_keyboard_mode_is_available(monkeypatch):
-    user32, kernel32 = object(), object()
+def test_paste_shortcut_uses_hardware_scan_codes(monkeypatch):
     calls = []
-    monkeypatch.setenv("PYMUMU_UNICODE_INPUT_MODE", "keyboard")
-    monkeypatch.setattr(windows_input, "_windows_api", lambda: (user32, kernel32))
     monkeypatch.setattr(windows_input.time, "sleep", lambda delay: None)
-    monkeypatch.setattr(windows_input, "_activate_window", lambda *args: 456)
     monkeypatch.setattr(
         windows_input,
-        "_send_unicode_text",
-        lambda received_user32, text: calls.append((received_user32, text)),
+        "_send_keyboard_events",
+        lambda user32, events: calls.append(
+            [(event.ki.wVk, event.ki.wScan, event.ki.dwFlags) for event in events]
+        ),
     )
 
-    result = windows_input.paste_text(123, "随风而动")
+    windows_input._send_ctrl_v(object())
 
-    assert calls == [(user32, "随风而动")]
-    assert result["method"] == "win32_unicode_keyboard"
+    assert calls == [
+        [(0, 0x1D, 0x0008)],
+        [(0, 0x2F, 0x0008)],
+        [(0, 0x2F, 0x000A)],
+        [(0, 0x1D, 0x000A)],
+    ]
 
 
 def test_explicit_shared_folder_does_not_use_legacy_config(tmp_path):
