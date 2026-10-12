@@ -1,13 +1,15 @@
-from .instance import InstanceMixin
-from .control import ControlMixin
 from .adb import AdbMixin
-from .utils import UtilsMixin
+from .control import ControlMixin
+from .instance import InstanceMixin
 from .shares import SharesMixin
-from .exception import MuMuException
+from .utils import UtilsMixin
 
-class PyMumu(InstanceMixin, AdbMixin, UtilsMixin, ControlMixin, SharesMixin):
+
+class PyMumu(InstanceMixin, ControlMixin, AdbMixin, UtilsMixin, SharesMixin):
     def __init__(self, path: str = None, index: int = 0):
-        self.path = self._find_mumu()
+        self.path = path or self._find_mumu()
         self.index = index
+        self.shared_folder_path = None
+
     def __repr__(self):
         return f"PyMumu(path='{self.path}', index={self.index})"

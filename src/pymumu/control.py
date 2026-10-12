@@ -1,3 +1,6 @@
+import time
+
+
 class ControlMixin:
     # App Control
     def app_install(self, apk_path: str, index=None):
@@ -36,30 +39,116 @@ class ControlMixin:
         idx = index if index is not None else self.index
         return self._run("control", "-v", idx, "tool", "func", "--name", name)
 
+    def tool_command(self, command: str, index=None):
+        """Run a MuMu native tool command without invoking the ADB executable."""
+        idx = index if index is not None else self.index
+        return self._run("control", "-v", idx, "tool", "cmd", "--cmd", command)
+
     def tool_tap(self, x: int, y: int, index=None):
         """Tap at position (x, y)"""
         idx = index if index is not None else self.index
-        return self._run("control", "-v", str(idx), "tool", "cmd", "--cmd", f"input tap {x} {y}")
+        return self.tool_command(f"input tap {x} {y}", index=idx)
 
-    def tool_swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 100, index=None):
+    def tool_swipe(
+        self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 100, index=None
+    ):
         """Swipe from (x1, y1) to (x2, y2)"""
         idx = index if index is not None else self.index
-        return self._run("control", "-v", idx, "tool", "cmd", "--cmd", f"input swipe {x1} {y1} {x2} {y2} {duration_ms}")
+        return self.tool_command(
+            f"input swipe {x1} {y1} {x2} {y2} {duration_ms}", index=idx
+        )
 
     def tool_long_press(self, x: int, y: int, duration_ms: int = 900, index=None):
         """Long press at position (x, y)"""
         idx = index if index is not None else self.index
-        return self._run("control", "-v", idx, "tool", "cmd", "--cmd", f"input swipe {x} {y} {x} {y} {duration_ms}")
+        return self.tool_command(
+            f"input swipe {x} {y} {x} {y} {duration_ms}", index=idx
+        )
 
     def tool_input_text(self, text: str, index=None):
         """Input text into player via toolbar"""
         idx = index if index is not None else self.index
         return self._run("control", "-v", idx, "tool", "cmd", "--text", text)
 
+    # High-level input API. These methods deliberately use MumuManager's
+    # control channel. They never spawn or connect to adb.
+    def tap(self, x: int, y: int, index=None):
+        return self.tool_tap(x, y, index=index)
+
+    def double_tap(self, x: int, y: int, interval_ms: int = 100, index=None):
+        result = self.tool_tap(x, y, index=index)
+        time.sleep(max(0, interval_ms) / 1000)
+        self.tool_tap(x, y, index=index)
+        return result
+
+    def swipe(
+        self,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        duration_ms: int = 300,
+        index=None,
+    ):
+        return self.tool_swipe(x1, y1, x2, y2, duration_ms, index=index)
+
+    def long_press(self, x: int, y: int, duration_ms: int = 900, index=None):
+        return self.tool_long_press(x, y, duration_ms, index=index)
+
+    def touch_down(self, x: int, y: int, index=None):
+        return self.tool_command(f"input motionevent DOWN {x} {y}", index=index)
+
+    def touch_move(self, x: int, y: int, index=None):
+        return self.tool_command(f"input motionevent MOVE {x} {y}", index=index)
+
+    def touch_up(self, x: int, y: int, index=None):
+        return self.tool_command(f"input motionevent UP {x} {y}", index=index)
+
+    def input_text(self, text: str, index=None):
+        return self.tool_input_text(text, index=index)
+
+    def clear_text(self, index=None):
+        # Select all and delete through MuMu's native command channel.
+        self.tool_command(
+            "input keycombination KEYCODE_CTRL_LEFT KEYCODE_A", index=index
+        )
+        return self.tool_command("input keyevent KEYCODE_DEL", index=index)
+
+    def key_event(self, key: str, index=None):
+        functions = {
+            "back": "go_back",
+            "home": "go_home",
+            "volume_up": "volume_up",
+            "volume_down": "volume_down",
+            "volume_mute": "volume_mute",
+        }
+        commands = {
+            "recents": "input keyevent KEYCODE_APP_SWITCH",
+            "power": "input keyevent KEYCODE_POWER",
+            "enter": "input keyevent KEYCODE_ENTER",
+            "delete": "input keyevent KEYCODE_DEL",
+            "space": "input keyevent KEYCODE_SPACE",
+        }
+        if key in functions:
+            return self.tool_func(functions[key], index=index)
+        if key in commands:
+            return self.tool_command(commands[key], index=index)
+        raise ValueError(f"Unsupported MuMu key: {key}")
+
     def tool_location(self, longitude: float, latitude: float, index=None):
         """Update GPS location. longitude: -180~180, latitude: -90~90"""
         idx = index if index is not None else self.index
-        return self._run("control", "-v", idx, "tool", "location", "--longitude", longitude, "--latitude", latitude)
+        return self._run(
+            "control",
+            "-v",
+            idx,
+            "tool",
+            "location",
+            "--longitude",
+            longitude,
+            "--latitude",
+            latitude,
+        )
 
     def tool_downcpu(self, cap: int, index=None):
         """Set CPU execution cap (1-100)"""
@@ -69,7 +158,19 @@ class ControlMixin:
     def tool_gyro(self, x: float, y: float, z: float, index=None):
         """Change gravity sensing values"""
         idx = index if index is not None else self.index
-        return self._run("control", "-v", idx, "tool", "gyro", "--gyro_x", x, "--gyro_y", y, "--gyro_z", z)
+        return self._run(
+            "control",
+            "-v",
+            idx,
+            "tool",
+            "gyro",
+            "--gyro_x",
+            x,
+            "--gyro_y",
+            y,
+            "--gyro_z",
+            z,
+        )
 
     # Simulation
     def set_simulation(self, key: str, value: str, index=None):
@@ -78,7 +179,9 @@ class ControlMixin:
         Use '__null__' to clear value
         """
         idx = index if index is not None else self.index
-        return self._run("simulation", "-v", idx, "--simu_key", key, "--simu_value", value)
+        return self._run(
+            "simulation", "-v", idx, "--simu_key", key, "--simu_value", value
+        )
 
     def set_android_id(self, value: str, index=None):
         """Simulate Android ID"""
@@ -102,11 +205,13 @@ class ControlMixin:
         """Set a player setting value. Use '__null__' to clear"""
         idx = index if index is not None else self.index
         return self._run("setting", "-v", idx, "--key", key, "--value", value)
-    
-    def enable_root(index=None):
+
+    def enable_root(self, index=None):
         """Enable root permission for a player"""
         idx = index if index is not None else self.index
-        return self._run("setting", "-v", idx, "--key", "root_permission", "--value", "true")
+        return self._run(
+            "setting", "-v", idx, "--key", "root_permission", "--value", "true"
+        )
 
     def get_all_settings(self, index=None):
         """Get all settings for a player"""

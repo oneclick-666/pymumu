@@ -3,10 +3,20 @@ requires = ["setuptools"]
 
 [project]
 name = "pymumu"
-version = "0.1.0"
+version = "0.2.0"
 description = "An API to control MuMu Player for Windows using python"
-readme = "README.MD"
+readme = "README.md"
 requires-python = ">=3.8"
+
+[project.optional-dependencies]
+service = [
+    "fastapi>=0.110",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.29",
+]
+
+[project.scripts]
+pymumu-service = "pymumu.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

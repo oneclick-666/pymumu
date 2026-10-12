@@ -182,6 +182,40 @@ mumu.log_off()
 
 ---
 
+## HTTP control service
+
+Install the service extras on the Windows machine that runs MuMu Player:
+
+```powershell
+pip install -e ".[service]"
+pymumu-service --host 0.0.0.0 --port 8765
+```
+
+The service exposes native MuMu controls at:
+
+- `POST /api/v1/emulators/{index}/control`
+- `GET /api/v1/emulators/{index}/screenshot`
+- `GET /api/v1/emulators/{index}/current-app`
+- `POST /api/v1/emulators/{index}/files`
+
+These routes execute `MumuManager.exe` and never execute `adb.exe`. If an
+existing FastAPI application already manages MuMu instance lifecycle, mount
+the router into it so lifecycle and control share one base URL:
+
+```python
+from fastapi import FastAPI
+from pymumu.server import create_router
+
+app = FastAPI()
+app.include_router(create_router())
+```
+
+AutoGLM may continue to use its existing scrcpy connection for the live video
+stream. Input, screenshots used by agents, app launch, file transfer and key
+events are handled by this service.
+
+---
+
 ## Multiple Instances
 
 ```python
