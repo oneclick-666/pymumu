@@ -93,6 +93,53 @@ def test_ascii_text_uses_physical_keyboard(monkeypatch):
     }
 
 
+def test_unicode_text_uses_persistent_clipboard(monkeypatch):
+    user32, kernel32 = object(), object()
+    calls = []
+    monkeypatch.setattr(windows_input, "_windows_api", lambda: (user32, kernel32))
+    monkeypatch.setattr(windows_input.time, "sleep", lambda delay: None)
+    monkeypatch.setattr(
+        windows_input,
+        "_activate_window",
+        lambda received_user32, received_kernel32, handle: 456,
+    )
+    monkeypatch.setattr(
+        windows_input,
+        "_write_clipboard_text",
+        lambda received_user32, received_kernel32, text: calls.append(
+            (received_user32, received_kernel32, text)
+        ),
+    )
+    monkeypatch.setattr(
+        windows_input, "_send_ctrl_v", lambda value: calls.append(value)
+    )
+    monkeypatch.delenv("PYMUMU_UNICODE_INPUT_MODE", raising=False)
+
+    result = windows_input.paste_text(123, "随风而动")
+
+    assert calls == [(user32, kernel32, "随风而动"), user32]
+    assert result["method"] == "win32_persistent_clipboard"
+
+
+def test_unicode_keyboard_mode_is_available(monkeypatch):
+    user32, kernel32 = object(), object()
+    calls = []
+    monkeypatch.setenv("PYMUMU_UNICODE_INPUT_MODE", "keyboard")
+    monkeypatch.setattr(windows_input, "_windows_api", lambda: (user32, kernel32))
+    monkeypatch.setattr(windows_input.time, "sleep", lambda delay: None)
+    monkeypatch.setattr(windows_input, "_activate_window", lambda *args: 456)
+    monkeypatch.setattr(
+        windows_input,
+        "_send_unicode_text",
+        lambda received_user32, text: calls.append((received_user32, text)),
+    )
+
+    result = windows_input.paste_text(123, "随风而动")
+
+    assert calls == [(user32, "随风而动")]
+    assert result["method"] == "win32_unicode_keyboard"
+
+
 def test_explicit_shared_folder_does_not_use_legacy_config(tmp_path):
     mumu = PyMumu(
         path=r"C:\MuMu\MumuManager.exe",
