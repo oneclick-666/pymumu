@@ -12,12 +12,31 @@ class SharesMixin:
 
     def _get_shared_folder_path(self):
         """Determine the path to the shared folder used for file transfers."""
+        if self.shared_folder_path:
+            folder = os.path.abspath(os.path.expanduser(self.shared_folder_path))
+            if not os.path.isdir(folder):
+                raise FileNotFoundError(f"MuMu shared folder not found: {folder}")
+            return folder
+
+        configured = os.getenv("PYMUMU_SHARED_FOLDER_PATH", "").strip()
+        if configured:
+            folder = os.path.abspath(os.path.expanduser(configured))
+            if not os.path.isdir(folder):
+                raise FileNotFoundError(f"MuMu shared folder not found: {folder}")
+            self.shared_folder_path = folder
+            return folder
+
         exe = self.path
         base = os.path.dirname(exe)
         mumu_root = os.path.dirname(base)
         configs_dir = os.path.join(mumu_root, "configs")
         vm_config = os.path.join(configs_dir, "vm_config.json")
-        with open(vm_config, "r") as f:
+        if not os.path.isfile(vm_config):
+            raise FileNotFoundError(
+                "MuMu shared folder is not configured and the legacy config was not "
+                f"found: {vm_config}; set PYMUMU_SHARED_FOLDER_PATH"
+            )
+        with open(vm_config, "r", encoding="utf-8-sig") as f:
             config = json.load(f)
         self.shared_folder_path = config["vm"]["sharefolder"]["user"]["path"]
         return self.shared_folder_path

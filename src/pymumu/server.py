@@ -61,13 +61,20 @@ def _png_size(data: bytes) -> tuple[int, int]:
     return struct.unpack(">II", data[16:24])
 
 
-def create_router(manager_path: str | None = None) -> APIRouter:
+def create_router(
+    manager_path: str | None = None,
+    shared_folder_path: str | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api/v1/emulators", tags=["MuMu control"])
     current_packages: dict[int, str] = {}
 
     def manager(index: int) -> PyMumu:
         return PyMumu(
-            path=manager_path or os.getenv("PYMUMU_MANAGER_PATH"), index=index
+            path=manager_path or os.getenv("PYMUMU_MANAGER_PATH"),
+            index=index,
+            shared_folder_path=(
+                shared_folder_path or os.getenv("PYMUMU_SHARED_FOLDER_PATH")
+            ),
         )
 
     @router.post("/{index}/control")
@@ -155,6 +162,8 @@ def create_router(manager_path: str | None = None) -> APIRouter:
         try:
             mumu = manager(index)
             shared_root = Path(mumu._get_shared_folder_path())
+            if not shared_root.is_dir():
+                raise FileNotFoundError(f"MuMu shared folder not found: {shared_root}")
             target_dir = shared_root / "Download" / "AutoGLM"
             target_dir.mkdir(parents=True, exist_ok=True)
             target = target_dir / f"{int(time.time() * 1000)}-{safe_name}"
@@ -175,9 +184,12 @@ def create_router(manager_path: str | None = None) -> APIRouter:
     return router
 
 
-def create_app(manager_path: str | None = None) -> FastAPI:
+def create_app(
+    manager_path: str | None = None,
+    shared_folder_path: str | None = None,
+) -> FastAPI:
     app = FastAPI(title="pymumu service", version="0.2.0")
-    app.include_router(create_router(manager_path))
+    app.include_router(create_router(manager_path, shared_folder_path))
     return app
 
 
@@ -186,10 +198,15 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--manager-path", default=None)
+    parser.add_argument("--shared-folder-path", default=None)
     args = parser.parse_args()
     import uvicorn
 
-    uvicorn.run(create_app(args.manager_path), host=args.host, port=args.port)
+    uvicorn.run(
+        create_app(args.manager_path, args.shared_folder_path),
+        host=args.host,
+        port=args.port,
+    )
 
 
 app = create_app()
