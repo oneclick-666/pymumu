@@ -30,6 +30,12 @@ class UtilsMixin:
             r"C:\Program Files\Netease\MuMuPlayer\nx_main\MumuManager.exe"
         ):
             return r"C:\Program Files\Netease\MuMuPlayer\nx_main\MumuManager.exe"
+        for candidate in (
+            r"C:\Program Files\Netease\MuMuPlayer-12.0\shell\MuMuManager.exe",
+            r"C:\Program Files (x86)\Netease\MuMuPlayer-12.0\shell\MuMuManager.exe",
+        ):
+            if os.path.exists(candidate):
+                return candidate
         raise MuMuNotFoundError("MuMuPlayer not found")
 
     def _run(self, *args: Any, allowErrors: bool = False, timeout: float = 30):
