@@ -222,11 +222,9 @@ def _activate_window(user32, kernel32, window_handle: int) -> int:
     return int(root)
 
 
-def _send_ctrl_v(user32) -> None:
+def _keyboard_types():
     input_keyboard = 1
     keyeventf_keyup = 0x0002
-    vk_control = 0x11
-    vk_v = 0x56
     ulong_ptr = ctypes.c_size_t
     uint32 = ctypes.c_uint32
     int32 = ctypes.c_int32
@@ -270,27 +268,85 @@ def _send_ctrl_v(user32) -> None:
         _anonymous_ = ("value",)
         _fields_ = [("type", uint32), ("value", INPUT_UNION)]
 
-    user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+    return INPUT, KEYBDINPUT, input_keyboard, keyeventf_keyup
+
+
+def _send_keyboard_events(user32, events) -> None:
+    input_type = type(events)._type_
+    user32.SendInput.argtypes = [
+        wintypes.UINT,
+        ctypes.POINTER(input_type),
+        ctypes.c_int,
+    ]
     user32.SendInput.restype = wintypes.UINT
-    events = (INPUT * 4)(
-        INPUT(type=input_keyboard, ki=KEYBDINPUT(wVk=vk_control)),
-        INPUT(type=input_keyboard, ki=KEYBDINPUT(wVk=vk_v)),
-        INPUT(
+    sent = user32.SendInput(len(events), events, ctypes.sizeof(input_type))
+    if sent != len(events):
+        raise OSError(ctypes.get_last_error(), "Unable to send keyboard input to MuMu")
+
+
+def _send_ctrl_v(user32) -> None:
+    input_type, keyboard_type, input_keyboard, keyeventf_keyup = _keyboard_types()
+    vk_control = 0x11
+    vk_v = 0x56
+
+    events = (input_type * 4)(
+        input_type(type=input_keyboard, ki=keyboard_type(wVk=vk_control)),
+        input_type(type=input_keyboard, ki=keyboard_type(wVk=vk_v)),
+        input_type(
             type=input_keyboard,
-            ki=KEYBDINPUT(wVk=vk_v, dwFlags=keyeventf_keyup),
+            ki=keyboard_type(wVk=vk_v, dwFlags=keyeventf_keyup),
         ),
-        INPUT(
+        input_type(
             type=input_keyboard,
-            ki=KEYBDINPUT(wVk=vk_control, dwFlags=keyeventf_keyup),
+            ki=keyboard_type(wVk=vk_control, dwFlags=keyeventf_keyup),
         ),
     )
-    sent = user32.SendInput(len(events), events, ctypes.sizeof(INPUT))
-    if sent != len(events):
-        raise OSError(ctypes.get_last_error(), "Unable to send Ctrl+V to MuMu")
+    _send_keyboard_events(user32, events)
+
+
+def _send_physical_text(user32, text: str) -> None:
+    """Type text as physical keys using the active Windows keyboard layout."""
+
+    input_type, keyboard_type, input_keyboard, keyeventf_keyup = _keyboard_types()
+    user32.VkKeyScanW.argtypes = [wintypes.WCHAR]
+    user32.VkKeyScanW.restype = ctypes.c_short
+    modifier_keys = ((1, 0x10), (2, 0x11), (4, 0x12))  # Shift, Ctrl, Alt
+    event_values = []
+    for character in text:
+        mapped = user32.VkKeyScanW(character)
+        if mapped == -1:
+            raise ValueError(
+                f"Character cannot be typed as a physical key: {character!r}"
+            )
+        virtual_key = mapped & 0xFF
+        modifiers = (mapped >> 8) & 0xFF
+        pressed_modifiers = [key for flag, key in modifier_keys if modifiers & flag]
+        event_values.extend(
+            input_type(type=input_keyboard, ki=keyboard_type(wVk=key))
+            for key in pressed_modifiers
+        )
+        event_values.append(
+            input_type(type=input_keyboard, ki=keyboard_type(wVk=virtual_key))
+        )
+        event_values.append(
+            input_type(
+                type=input_keyboard,
+                ki=keyboard_type(wVk=virtual_key, dwFlags=keyeventf_keyup),
+            )
+        )
+        event_values.extend(
+            input_type(
+                type=input_keyboard,
+                ki=keyboard_type(wVk=key, dwFlags=keyeventf_keyup),
+            )
+            for key in reversed(pressed_modifiers)
+        )
+    if event_values:
+        _send_keyboard_events(user32, (input_type * len(event_values))(*event_values))
 
 
 def paste_text(window_handle: int, text: str) -> dict[str, Any]:
-    """Paste Unicode text into one MuMu instance using Win32 only."""
+    """Type text into one MuMu instance using Win32 only."""
 
     if not isinstance(text, str):
         raise TypeError("text must be a string")
@@ -298,21 +354,31 @@ def paste_text(window_handle: int, text: str) -> dict[str, Any]:
     handle = _parse_window_handle(window_handle)
 
     with _INPUT_LOCK:
-        had_text, previous_text = _read_clipboard_text(user32, kernel32)
-        try:
-            _write_clipboard_text(user32, kernel32, text)
-            root = _activate_window(user32, kernel32, handle)
-            _send_ctrl_v(user32)
-            # Let MuMu consume WM_PASTE before restoring the user's clipboard.
-            time.sleep(0.15)
-        finally:
-            if had_text:
-                _write_clipboard_text(user32, kernel32, previous_text)
-            else:
-                _clear_clipboard(user32)
+        root = _activate_window(user32, kernel32, handle)
+        # Give MuMu's render window one message-loop turn after activation.
+        time.sleep(0.05)
+        # MuMu handles ordinary host keyboard input more reliably than host
+        # clipboard synchronization. This path covers digits, Latin text and
+        # punctuation, including the browser control API's common "1" input.
+        if text.isascii():
+            _send_physical_text(user32, text)
+            method = "win32_physical_keyboard"
+        else:
+            had_text, previous_text = _read_clipboard_text(user32, kernel32)
+            try:
+                _write_clipboard_text(user32, kernel32, text)
+                _send_ctrl_v(user32)
+                # Let MuMu consume the clipboard before restoring it.
+                time.sleep(0.3)
+            finally:
+                if had_text:
+                    _write_clipboard_text(user32, kernel32, previous_text)
+                else:
+                    _clear_clipboard(user32)
+            method = "win32_clipboard"
 
     return {
-        "method": "win32_clipboard",
+        "method": method,
         "window_handle": f"0x{handle:X}",
         "root_window_handle": f"0x{root:X}",
     }

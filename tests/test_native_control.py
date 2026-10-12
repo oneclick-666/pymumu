@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from pymumu import PyMumu
+from pymumu import PyMumu, windows_input
 from pymumu.windows_input import get_instance_window
 
 
@@ -60,6 +60,37 @@ def test_unicode_text_targets_requested_instance_without_adb(monkeypatch):
 
 def test_instance_window_falls_back_to_main_window():
     assert get_instance_window({"main_wnd": "00840F4E"}) == int("00840F4E", 16)
+
+
+def test_ascii_text_uses_physical_keyboard(monkeypatch):
+    user32, kernel32 = object(), object()
+    calls = []
+    monkeypatch.setattr(windows_input, "_windows_api", lambda: (user32, kernel32))
+    monkeypatch.setattr(windows_input.time, "sleep", lambda delay: None)
+    monkeypatch.setattr(
+        windows_input,
+        "_activate_window",
+        lambda received_user32, received_kernel32, handle: 456,
+    )
+    monkeypatch.setattr(
+        windows_input,
+        "_send_physical_text",
+        lambda received_user32, text: calls.append((received_user32, text)),
+    )
+    monkeypatch.setattr(
+        windows_input,
+        "_read_clipboard_text",
+        lambda *args: (_ for _ in ()).throw(AssertionError("clipboard must not run")),
+    )
+
+    result = windows_input.paste_text(123, "1")
+
+    assert calls == [(user32, "1")]
+    assert result == {
+        "method": "win32_physical_keyboard",
+        "window_handle": "0x7B",
+        "root_window_handle": "0x1C8",
+    }
 
 
 def test_explicit_shared_folder_does_not_use_legacy_config(tmp_path):
