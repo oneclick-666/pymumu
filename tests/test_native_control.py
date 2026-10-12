@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from pymumu import PyMumu
+from pymumu.windows_input import get_instance_window
 
 
 def test_control_methods_only_invoke_mumu_manager(monkeypatch):
@@ -15,15 +18,48 @@ def test_control_methods_only_invoke_mumu_manager(monkeypatch):
 
     mumu.tap(1, 2)
     mumu.swipe(1, 2, 3, 4, 500)
-    mumu.input_text("中文 text")
     mumu.key_event("home")
     mumu.touch_down(5, 6)
     mumu.clear_text()
 
-    assert len(calls) == 7
+    assert len(calls) == 6
     assert all(call[0].endswith("MumuManager.exe") for call in calls)
     assert all(not any("adb" in part.lower() for part in call) for call in calls)
     assert all(call[1:4] == ["control", "-v", "3"] for call in calls)
+    tool_commands = [call for call in calls if call[4:6] == ["tool", "cmd"]]
+    assert len(tool_commands) == 5
+    assert all(call[6] == "-c" for call in tool_commands)
+
+
+def test_unicode_text_targets_requested_instance_without_adb(monkeypatch):
+    calls = []
+    pasted = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        payload = {"main_wnd": "00840F4E", "render_wnd": "00B30C7A"}
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
+        )()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "pymumu.control.paste_text",
+        lambda window_handle, text: pasted.append((window_handle, text)),
+    )
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    mumu.input_text("随风而动", index=61)
+
+    assert calls == [[r"C:\MuMu\MumuManager.exe", "info", "-v", "61"]]
+    assert all(not any("adb" in part.lower() for part in call) for call in calls)
+    assert pasted == [(int("00B30C7A", 16), "随风而动")]
+
+
+def test_instance_window_falls_back_to_main_window():
+    assert get_instance_window({"main_wnd": "00840F4E"}) == int("00840F4E", 16)
 
 
 def test_explicit_shared_folder_does_not_use_legacy_config(tmp_path):

@@ -1,5 +1,7 @@
 import time
 
+from .windows_input import get_instance_window, paste_text
+
 
 class ControlMixin:
     # App Control
@@ -42,7 +44,7 @@ class ControlMixin:
     def tool_command(self, command: str, index=None):
         """Run a MuMu native tool command without invoking the ADB executable."""
         idx = index if index is not None else self.index
-        return self._run("control", "-v", idx, "tool", "cmd", "--cmd", command)
+        return self._run("control", "-v", idx, "tool", "cmd", "-c", command)
 
     def tool_tap(self, x: int, y: int, index=None):
         """Tap at position (x, y)"""
@@ -66,12 +68,13 @@ class ControlMixin:
         )
 
     def tool_input_text(self, text: str, index=None):
-        """Input text into player via toolbar"""
+        """Input Unicode text through the instance's native Windows window."""
         idx = index if index is not None else self.index
-        return self._run("control", "-v", idx, "tool", "cmd", "--text", text)
+        window_handle = get_instance_window(self.info(index=idx))
+        return paste_text(window_handle, text)
 
-    # High-level input API. These methods deliberately use MumuManager's
-    # control channel. They never spawn or connect to adb.
+    # High-level input API. Touch/key operations use MumuManager's control
+    # channel; text uses the instance's Win32 window. None use ADB.
     def tap(self, x: int, y: int, index=None):
         return self.tool_tap(x, y, index=index)
 

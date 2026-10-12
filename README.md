@@ -113,7 +113,6 @@ mumu.adb_cmd("connect", index=0)
 mumu.shell("input tap 500 500", index=0)
 mumu.getprop("ro.build.version.release", index=0)
 mumu.setprop("ro.build.version.release", "12", index=0)
-mumu.input_text("hello world", index=0)
 ```
 
 ### Touch & Input
@@ -122,6 +121,8 @@ mumu.input_text("hello world", index=0)
 mumu.tap(500, 500, index=0)
 mumu.swipe(100, 500, 600, 500, duration_ms=300, index=0)
 mumu.long_press(500, 500, duration_ms=900, index=0)
+# Uses the MuMu instance window and the Win32 Unicode clipboard, not ADB.
+mumu.input_text("随风而动", index=0)
 ```
 
 ### Key Events
