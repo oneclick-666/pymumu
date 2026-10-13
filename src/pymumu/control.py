@@ -1,6 +1,12 @@
 import time
 
-from .windows_input import get_instance_window, mouse_gesture, paste_text, send_key
+from .windows_input import (
+    get_instance_window,
+    get_render_window,
+    mouse_gesture,
+    paste_text,
+    send_key,
+)
 
 
 class ControlMixin:
@@ -12,13 +18,22 @@ class ControlMixin:
             self._cached_window_handle = cached
         return cached
 
+    def _render_window(self, index=None, refresh=False):
+        idx = index if index is not None else self.index
+        cached = getattr(self, "_cached_render_window_handle", None)
+        if cached is None or refresh:
+            cached = get_render_window(self.info(index=idx))
+            self._cached_render_window_handle = cached
+            self._cached_window_handle = cached
+        return cached
+
     def _mouse_gesture(self, *args, index=None):
         try:
-            return mouse_gesture(self._instance_window(index), *args)
+            return mouse_gesture(self._render_window(index), *args)
         except RuntimeError as error:
             if "window no longer exists" not in str(error):
                 raise
-            return mouse_gesture(self._instance_window(index, refresh=True), *args)
+            return mouse_gesture(self._render_window(index, refresh=True), *args)
 
     def _send_key(self, key, index=None):
         try:
@@ -29,8 +44,20 @@ class ControlMixin:
             return send_key(self._instance_window(index, refresh=True), key)
 
     def prepare_control(self, index=None):
-        """Resolve and cache the render window before interactive input starts."""
-        return {"window_handle": f"0x{self._instance_window(index, refresh=True):X}"}
+        """Refresh MuMu HWNDs without caching main_wnd as a touch target."""
+        idx = index if index is not None else self.index
+        info = self.info(index=idx)
+        window_handle = get_instance_window(info)
+        self._cached_window_handle = window_handle
+        try:
+            render_handle = get_render_window(info)
+        except RuntimeError:
+            self._cached_render_window_handle = None
+        else:
+            window_handle = render_handle
+            self._cached_render_window_handle = render_handle
+            self._cached_window_handle = render_handle
+        return {"window_handle": f"0x{window_handle:X}"}
 
     # App Control
     def app_install(self, apk_path: str, index=None):

@@ -57,6 +57,20 @@ def get_instance_window(info: Any) -> int:
     raise ValueError("MuMu info response has no render_wnd or main_wnd")
 
 
+def get_render_window(info: Any) -> int:
+    """Return only MuMu's Android render HWND, never the decorated main HWND."""
+
+    payload = info
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        payload = payload["data"]
+    if not isinstance(payload, dict):
+        raise TypeError("MuMu info response does not contain instance data")
+    value = payload.get("render_wnd")
+    if value in (None, "", 0):
+        raise RuntimeError("MuMu render window is not ready")
+    return _parse_window_handle(value)
+
+
 def _windows_api():
     if sys.platform != "win32":
         raise RuntimeError("MuMu native text input is only available on Windows")
@@ -365,27 +379,9 @@ def _device_to_screen(
     client_height = rect.bottom - rect.top
     if client_width <= 0 or client_height <= 0:
         raise RuntimeError("MuMu render window has no visible client area")
-    # These high-resolution MuMu render surfaces report touch coordinates about
-    # 20 device pixels below the visible frame. Compensate before scaling so
-    # taps and both ends of a swipe use the same calibrated coordinate system.
-    needs_vertical_calibration = (device_width, device_height) in {
-        (1440, 2560),
-        (2160, 3840),
-    }
-    calibrated_y = (
-        max(0, y - 20)
-        if needs_vertical_calibration
-        else y
-    )
     point = wintypes.POINT(
         max(0, min(client_width - 1, round(x * client_width / device_width))),
-        max(
-            0,
-            min(
-                client_height - 1,
-                round(calibrated_y * client_height / device_height),
-            ),
-        ),
+        max(0, min(client_height - 1, round(y * client_height / device_height))),
     )
     if not user32.ClientToScreen(wintypes.HWND(window_handle), ctypes.byref(point)):
         raise OSError(ctypes.get_last_error(), "Unable to map MuMu render coordinates")

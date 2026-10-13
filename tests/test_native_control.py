@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from pymumu import PyMumu, windows_input
-from pymumu.windows_input import get_instance_window
+from pymumu.windows_input import get_instance_window, get_render_window
 
 
 def test_control_methods_only_invoke_mumu_manager(monkeypatch):
@@ -85,6 +85,44 @@ def test_fast_tap_caches_window_and_skips_control_command(monkeypatch):
     assert gestures == [
         (int("00B30C7A", 16), 100, 200, 100, 200, 1080, 1920),
         (int("00B30C7A", 16), 300, 400, 300, 400, 1080, 1920),
+    ]
+
+
+def test_main_window_from_prepare_is_not_reused_for_touch(monkeypatch):
+    manager_calls = []
+    gestures = []
+    responses = iter(
+        (
+            {"main_wnd": "00840F4E"},
+            {"main_wnd": "00840F4E", "render_wnd": "00B30C7A"},
+        )
+    )
+
+    def fake_run(cmd, **kwargs):
+        manager_calls.append(cmd)
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(next(responses)),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "pymumu.control.mouse_gesture",
+        lambda *args: gestures.append(args) or {"method": "win32_mouse"},
+    )
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    assert mumu.prepare_control() == {"window_handle": "0x840F4E"}
+    mumu.tap(100, 200, device_width=1080, device_height=1920)
+
+    assert len(manager_calls) == 2
+    assert gestures == [
+        (int("00B30C7A", 16), 100, 200, 100, 200, 1080, 1920),
     ]
 
 
@@ -190,7 +228,7 @@ def test_fast_key_refreshes_stale_window(monkeypatch):
     assert calls == [(123, "delete"), (456, "delete")]
 
 
-def test_high_resolution_coordinates_are_shifted_up_20_device_pixels(monkeypatch):
+def test_all_resolutions_map_without_fixed_vertical_offset(monkeypatch):
     class User32:
         def GetClientRect(self, _handle, rect_pointer):
             rect = rect_pointer._obj
@@ -202,10 +240,10 @@ def test_high_resolution_coordinates_are_shifted_up_20_device_pixels(monkeypatch
 
     assert windows_input._device_to_screen(
         User32(), 123, 1080, 2020, 2160, 3840
-    ) == (540, 1000)
+    ) == (540, 1010)
     assert windows_input._device_to_screen(
         User32(), 123, 720, 1300, 1440, 2560
-    ) == (540, 960)
+    ) == (540, 975)
     assert windows_input._device_to_screen(
         User32(), 123, 1080, 2020, 1080, 2400
     ) == (1079, 1616)
@@ -236,6 +274,15 @@ def test_prepare_control_warms_window_cache(monkeypatch):
 
 def test_instance_window_falls_back_to_main_window():
     assert get_instance_window({"main_wnd": "00840F4E"}) == int("00840F4E", 16)
+
+
+def test_render_window_never_falls_back_to_main_window():
+    try:
+        get_render_window({"main_wnd": "00840F4E"})
+    except RuntimeError as error:
+        assert str(error) == "MuMu render window is not ready"
+    else:
+        raise AssertionError("main_wnd must not be used for touch input")
 
 
 def test_ascii_text_uses_physical_keyboard(monkeypatch):
