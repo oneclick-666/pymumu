@@ -494,7 +494,6 @@ def _send_physical_text(user32, text: str) -> None:
     user32.VkKeyScanW.argtypes = [wintypes.WCHAR]
     user32.VkKeyScanW.restype = ctypes.c_short
     modifier_keys = ((1, 0x10), (2, 0x11), (4, 0x12))  # Shift, Ctrl, Alt
-    event_values = []
     for character in text:
         mapped = user32.VkKeyScanW(character)
         if mapped == -1:
@@ -504,10 +503,10 @@ def _send_physical_text(user32, text: str) -> None:
         virtual_key = mapped & 0xFF
         modifiers = (mapped >> 8) & 0xFF
         pressed_modifiers = [key for flag, key in modifier_keys if modifiers & flag]
-        event_values.extend(
+        event_values = [
             input_type(type=input_keyboard, ki=keyboard_type(wVk=key))
             for key in pressed_modifiers
-        )
+        ]
         event_values.append(
             input_type(type=input_keyboard, ki=keyboard_type(wVk=virtual_key))
         )
@@ -524,8 +523,13 @@ def _send_physical_text(user32, text: str) -> None:
             )
             for key in reversed(pressed_modifiers)
         )
-    if event_values:
-        _send_keyboard_events(user32, (input_type * len(event_values))(*event_values))
+        # MuMu may reorder one large SendInput batch containing several
+        # characters. Complete each character before starting the next one and
+        # yield briefly to its input loop between events.
+        for event in event_values:
+            _send_keyboard_events(user32, (input_type * 1)(event))
+            time.sleep(0.003)
+        time.sleep(0.008)
 
 
 def paste_text(window_handle: int, text: str) -> dict[str, Any]:

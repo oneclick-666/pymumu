@@ -266,6 +266,36 @@ def test_ascii_text_uses_physical_keyboard(monkeypatch):
     }
 
 
+def test_physical_text_sends_characters_sequentially(monkeypatch):
+    class VkKeyScan:
+        argtypes = None
+        restype = None
+
+        def __call__(self, character):
+            return ord(character)
+
+    class User32:
+        VkKeyScanW = VkKeyScan()
+
+    calls = []
+    monkeypatch.setattr(windows_input.time, "sleep", lambda delay: None)
+    monkeypatch.setattr(
+        windows_input,
+        "_send_keyboard_events",
+        lambda user32, events: calls.append(
+            [(event.ki.wVk, event.ki.dwFlags) for event in events]
+        ),
+    )
+
+    windows_input._send_physical_text(User32(), "123456")
+
+    assert calls == [
+        [(ord(character), flags)]
+        for character in "123456"
+        for flags in (0, 0x0002)
+    ]
+
+
 def test_unicode_text_uses_scancode_paste(monkeypatch):
     user32, kernel32 = object(), object()
     calls = []
