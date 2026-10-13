@@ -295,26 +295,30 @@ def _send_keyboard_events(user32, events) -> None:
 def send_key(window_handle: int, key: str) -> dict[str, Any]:
     """Send one latency-sensitive key directly to a MuMu render window."""
 
-    virtual_keys = {
-        "delete": 0x08,  # VK_BACK
-        "enter": 0x0D,  # VK_RETURN
-        "space": 0x20,  # VK_SPACE
-        "volume_mute": 0xAD,
-        "volume_down": 0xAE,
-        "volume_up": 0xAF,
+    scan_codes = {
+        "delete": 0x0E,  # Backspace / Android KEYCODE_DEL
+        "enter": 0x1C,
+        "space": 0x39,
     }
-    virtual_key = virtual_keys.get(key)
-    if virtual_key is None:
+    scan_code = scan_codes.get(key)
+    if scan_code is None:
         raise ValueError(f"Unsupported Win32 MuMu key: {key}")
 
     user32, kernel32 = _windows_api()
     handle = _parse_window_handle(window_handle)
     input_type, keyboard_type, input_keyboard, keyeventf_keyup = _keyboard_types()
+    keyeventf_scancode = 0x0008
     events = (
-        input_type(type=input_keyboard, ki=keyboard_type(wVk=virtual_key)),
         input_type(
             type=input_keyboard,
-            ki=keyboard_type(wVk=virtual_key, dwFlags=keyeventf_keyup),
+            ki=keyboard_type(wScan=scan_code, dwFlags=keyeventf_scancode),
+        ),
+        input_type(
+            type=input_keyboard,
+            ki=keyboard_type(
+                wScan=scan_code,
+                dwFlags=keyeventf_scancode | keyeventf_keyup,
+            ),
         ),
     )
     with _INPUT_LOCK:

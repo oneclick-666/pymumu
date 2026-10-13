@@ -88,7 +88,7 @@ def test_fast_tap_caches_window_and_skips_control_command(monkeypatch):
     ]
 
 
-def test_latency_sensitive_keys_use_cached_win32_window(monkeypatch):
+def test_delete_uses_cached_win32_window_and_volume_uses_mumu(monkeypatch):
     manager_calls = []
     key_calls = []
 
@@ -117,12 +117,55 @@ def test_latency_sensitive_keys_use_cached_win32_window(monkeypatch):
     mumu.key_event("volume_down")
     mumu.key_event("volume_up")
 
-    assert manager_calls == [[r"C:\MuMu\MumuManager.exe", "info", "-v", "3"]]
+    assert manager_calls == [
+        [r"C:\MuMu\MumuManager.exe", "info", "-v", "3"],
+        [
+            r"C:\MuMu\MumuManager.exe",
+            "control",
+            "-v",
+            "3",
+            "tool",
+            "func",
+            "--name",
+            "volume_down",
+        ],
+        [
+            r"C:\MuMu\MumuManager.exe",
+            "control",
+            "-v",
+            "3",
+            "tool",
+            "func",
+            "--name",
+            "volume_up",
+        ],
+    ]
     assert key_calls == [
         (int("00B30C7A", 16), "delete"),
-        (int("00B30C7A", 16), "volume_down"),
-        (int("00B30C7A", 16), "volume_up"),
     ]
+
+
+def test_delete_uses_backspace_hardware_scan_code(monkeypatch):
+    user32, kernel32 = object(), object()
+    sent = []
+    monkeypatch.setattr(windows_input, "_windows_api", lambda: (user32, kernel32))
+    monkeypatch.setattr(
+        windows_input,
+        "_activate_window",
+        lambda received_user32, received_kernel32, handle: 456,
+    )
+    monkeypatch.setattr(
+        windows_input,
+        "_send_keyboard_events",
+        lambda received_user32, events: sent.extend(
+            (event.ki.wVk, event.ki.wScan, event.ki.dwFlags) for event in events
+        ),
+    )
+
+    result = windows_input.send_key(123, "delete")
+
+    assert sent == [(0, 0x0E, 0x0008), (0, 0x0E, 0x000A)]
+    assert result["method"] == "win32_keyboard"
 
 
 def test_fast_key_refreshes_stale_window(monkeypatch):

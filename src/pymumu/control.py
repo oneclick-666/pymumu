@@ -210,15 +210,15 @@ class ControlMixin:
             "delete",
             "enter",
             "space",
-            "volume_up",
-            "volume_down",
-            "volume_mute",
         }
         if key in fast_keys:
             return self._send_key(key, index=index)
         functions = {
             "back": "go_back",
             "home": "go_home",
+            "volume_up": "volume_up",
+            "volume_down": "volume_down",
+            "volume_mute": "volume_mute",
         }
         commands = {
             "recents": "input keyevent KEYCODE_APP_SWITCH",
