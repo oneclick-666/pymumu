@@ -292,6 +292,43 @@ def _send_keyboard_events(user32, events) -> None:
         raise OSError(ctypes.get_last_error(), "Unable to send keyboard input to MuMu")
 
 
+def send_key(window_handle: int, key: str) -> dict[str, Any]:
+    """Send one latency-sensitive key directly to a MuMu render window."""
+
+    virtual_keys = {
+        "delete": 0x08,  # VK_BACK
+        "enter": 0x0D,  # VK_RETURN
+        "space": 0x20,  # VK_SPACE
+        "volume_mute": 0xAD,
+        "volume_down": 0xAE,
+        "volume_up": 0xAF,
+    }
+    virtual_key = virtual_keys.get(key)
+    if virtual_key is None:
+        raise ValueError(f"Unsupported Win32 MuMu key: {key}")
+
+    user32, kernel32 = _windows_api()
+    handle = _parse_window_handle(window_handle)
+    input_type, keyboard_type, input_keyboard, keyeventf_keyup = _keyboard_types()
+    events = (
+        input_type(type=input_keyboard, ki=keyboard_type(wVk=virtual_key)),
+        input_type(
+            type=input_keyboard,
+            ki=keyboard_type(wVk=virtual_key, dwFlags=keyeventf_keyup),
+        ),
+    )
+    with _INPUT_LOCK:
+        root = _activate_window(user32, kernel32, handle)
+        _send_keyboard_events(user32, (input_type * len(events))(*events))
+
+    return {
+        "method": "win32_keyboard",
+        "key": key,
+        "window_handle": f"0x{handle:X}",
+        "root_window_handle": f"0x{root:X}",
+    }
+
+
 def _send_mouse_button(user32, down: bool) -> None:
     input_type, _, _, _ = _keyboard_types()
     event = input_type(type=0)
@@ -324,9 +361,23 @@ def _device_to_screen(
     client_height = rect.bottom - rect.top
     if client_width <= 0 or client_height <= 0:
         raise RuntimeError("MuMu render window has no visible client area")
+    # MuMu's 2160 x 3840 render surface reports touch coordinates about 20
+    # device pixels below the visible frame. Compensate before scaling so taps
+    # and both ends of a swipe use the same calibrated coordinate system.
+    calibrated_y = (
+        max(0, y - 20)
+        if (device_width, device_height) == (2160, 3840)
+        else y
+    )
     point = wintypes.POINT(
         max(0, min(client_width - 1, round(x * client_width / device_width))),
-        max(0, min(client_height - 1, round(y * client_height / device_height))),
+        max(
+            0,
+            min(
+                client_height - 1,
+                round(calibrated_y * client_height / device_height),
+            ),
+        ),
     )
     if not user32.ClientToScreen(wintypes.HWND(window_handle), ctypes.byref(point)):
         raise OSError(ctypes.get_last_error(), "Unable to map MuMu render coordinates")

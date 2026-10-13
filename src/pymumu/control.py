@@ -1,6 +1,6 @@
 import time
 
-from .windows_input import get_instance_window, mouse_gesture, paste_text
+from .windows_input import get_instance_window, mouse_gesture, paste_text, send_key
 
 
 class ControlMixin:
@@ -19,6 +19,14 @@ class ControlMixin:
             if "window no longer exists" not in str(error):
                 raise
             return mouse_gesture(self._instance_window(index, refresh=True), *args)
+
+    def _send_key(self, key, index=None):
+        try:
+            return send_key(self._instance_window(index), key)
+        except RuntimeError as error:
+            if "window no longer exists" not in str(error):
+                raise
+            return send_key(self._instance_window(index, refresh=True), key)
 
     def prepare_control(self, index=None):
         """Resolve and cache the render window before interactive input starts."""
@@ -198,19 +206,23 @@ class ControlMixin:
         return self.tool_command("input keyevent KEYCODE_DEL", index=index)
 
     def key_event(self, key: str, index=None):
+        fast_keys = {
+            "delete",
+            "enter",
+            "space",
+            "volume_up",
+            "volume_down",
+            "volume_mute",
+        }
+        if key in fast_keys:
+            return self._send_key(key, index=index)
         functions = {
             "back": "go_back",
             "home": "go_home",
-            "volume_up": "volume_up",
-            "volume_down": "volume_down",
-            "volume_mute": "volume_mute",
         }
         commands = {
             "recents": "input keyevent KEYCODE_APP_SWITCH",
             "power": "input keyevent KEYCODE_POWER",
-            "enter": "input keyevent KEYCODE_ENTER",
-            "delete": "input keyevent KEYCODE_DEL",
-            "space": "input keyevent KEYCODE_SPACE",
         }
         if key in functions:
             return self.tool_func(functions[key], index=index)
