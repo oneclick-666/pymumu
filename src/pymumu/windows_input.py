@@ -365,12 +365,16 @@ def _device_to_screen(
     client_height = rect.bottom - rect.top
     if client_width <= 0 or client_height <= 0:
         raise RuntimeError("MuMu render window has no visible client area")
-    # MuMu's 2160 x 3840 render surface reports touch coordinates about 20
-    # device pixels below the visible frame. Compensate before scaling so taps
-    # and both ends of a swipe use the same calibrated coordinate system.
+    # These high-resolution MuMu render surfaces report touch coordinates about
+    # 20 device pixels below the visible frame. Compensate before scaling so
+    # taps and both ends of a swipe use the same calibrated coordinate system.
+    needs_vertical_calibration = (device_width, device_height) in {
+        (1440, 2560),
+        (2160, 3840),
+    }
     calibrated_y = (
         max(0, y - 20)
-        if (device_width, device_height) == (2160, 3840)
+        if needs_vertical_calibration
         else y
     )
     point = wintypes.POINT(

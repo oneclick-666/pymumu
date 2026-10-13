@@ -190,7 +190,7 @@ def test_fast_key_refreshes_stale_window(monkeypatch):
     assert calls == [(123, "delete"), (456, "delete")]
 
 
-def test_2160_by_3840_coordinates_are_shifted_up_20_device_pixels(monkeypatch):
+def test_high_resolution_coordinates_are_shifted_up_20_device_pixels(monkeypatch):
     class User32:
         def GetClientRect(self, _handle, rect_pointer):
             rect = rect_pointer._obj
@@ -203,6 +203,9 @@ def test_2160_by_3840_coordinates_are_shifted_up_20_device_pixels(monkeypatch):
     assert windows_input._device_to_screen(
         User32(), 123, 1080, 2020, 2160, 3840
     ) == (540, 1000)
+    assert windows_input._device_to_screen(
+        User32(), 123, 720, 1300, 1440, 2560
+    ) == (540, 960)
     assert windows_input._device_to_screen(
         User32(), 123, 1080, 2020, 1080, 2400
     ) == (1079, 1616)
