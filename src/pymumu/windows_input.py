@@ -1,4 +1,4 @@
-"""Windows-native text input for MuMu Player.
+"""Windows-native input for MuMu Player.
 
 MuMuManager does not expose a non-ADB text-input command.  This module targets
 the window handle reported by ``MuMuManager info`` and pastes Unicode text with
@@ -82,6 +82,14 @@ def _windows_api():
     user32.AttachThreadInput.restype = wintypes.BOOL
     user32.SetFocus.argtypes = [wintypes.HWND]
     user32.SetFocus.restype = wintypes.HWND
+    user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetClientRect.restype = wintypes.BOOL
+    user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+    user32.ClientToScreen.restype = wintypes.BOOL
+    user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+    user32.GetCursorPos.restype = wintypes.BOOL
+    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user32.SetCursorPos.restype = wintypes.BOOL
     user32.OpenClipboard.argtypes = [wintypes.HWND]
     user32.OpenClipboard.restype = wintypes.BOOL
     user32.CloseClipboard.argtypes = []
@@ -282,6 +290,109 @@ def _send_keyboard_events(user32, events) -> None:
     sent = user32.SendInput(len(events), events, ctypes.sizeof(input_type))
     if sent != len(events):
         raise OSError(ctypes.get_last_error(), "Unable to send keyboard input to MuMu")
+
+
+def _send_mouse_button(user32, down: bool) -> None:
+    input_type, _, _, _ = _keyboard_types()
+    event = input_type(type=0)
+    event.mi.dwFlags = 0x0002 if down else 0x0004
+    events = (input_type * 1)(event)
+    user32.SendInput.argtypes = [
+        wintypes.UINT,
+        ctypes.POINTER(input_type),
+        ctypes.c_int,
+    ]
+    user32.SendInput.restype = wintypes.UINT
+    if user32.SendInput(1, events, ctypes.sizeof(input_type)) != 1:
+        raise OSError(ctypes.get_last_error(), "Unable to send mouse input to MuMu")
+
+
+def _device_to_screen(
+    user32,
+    window_handle: int,
+    x: int,
+    y: int,
+    device_width: int,
+    device_height: int,
+) -> tuple[int, int]:
+    if device_width <= 0 or device_height <= 0:
+        raise ValueError("device dimensions must be positive")
+    rect = wintypes.RECT()
+    if not user32.GetClientRect(wintypes.HWND(window_handle), ctypes.byref(rect)):
+        raise OSError(ctypes.get_last_error(), "Unable to read MuMu render size")
+    client_width = rect.right - rect.left
+    client_height = rect.bottom - rect.top
+    if client_width <= 0 or client_height <= 0:
+        raise RuntimeError("MuMu render window has no visible client area")
+    point = wintypes.POINT(
+        max(0, min(client_width - 1, round(x * client_width / device_width))),
+        max(0, min(client_height - 1, round(y * client_height / device_height))),
+    )
+    if not user32.ClientToScreen(wintypes.HWND(window_handle), ctypes.byref(point)):
+        raise OSError(ctypes.get_last_error(), "Unable to map MuMu render coordinates")
+    return point.x, point.y
+
+
+def mouse_gesture(
+    window_handle: int,
+    start_x: int,
+    start_y: int,
+    end_x: int,
+    end_y: int,
+    device_width: int,
+    device_height: int,
+    duration_ms: int = 0,
+) -> dict[str, Any]:
+    """Send a physical mouse tap or drag directly to one MuMu render window."""
+
+    user32, kernel32 = _windows_api()
+    handle = _parse_window_handle(window_handle)
+    duration_ms = max(0, int(duration_ms))
+    with _INPUT_LOCK:
+        root = _activate_window(user32, kernel32, handle)
+        start = _device_to_screen(
+            user32, handle, start_x, start_y, device_width, device_height
+        )
+        end = _device_to_screen(
+            user32, handle, end_x, end_y, device_width, device_height
+        )
+        previous = wintypes.POINT()
+        restore_cursor = bool(user32.GetCursorPos(ctypes.byref(previous)))
+        pressed = False
+        try:
+            if not user32.SetCursorPos(*start):
+                raise OSError(ctypes.get_last_error(), "Unable to position the mouse")
+            _send_mouse_button(user32, True)
+            pressed = True
+            if start == end:
+                time.sleep(0.01)
+            else:
+                steps = max(2, min(60, duration_ms // 16 or 2))
+                step_delay = duration_ms / steps / 1000 if duration_ms else 0
+                for step in range(1, steps + 1):
+                    ratio = step / steps
+                    if not user32.SetCursorPos(
+                        round(start[0] + (end[0] - start[0]) * ratio),
+                        round(start[1] + (end[1] - start[1]) * ratio),
+                    ):
+                        raise OSError(
+                            ctypes.get_last_error(), "Unable to drag the mouse"
+                        )
+                    if step_delay:
+                        time.sleep(step_delay)
+            _send_mouse_button(user32, False)
+            pressed = False
+        finally:
+            if pressed:
+                _send_mouse_button(user32, False)
+            if restore_cursor:
+                user32.SetCursorPos(previous.x, previous.y)
+
+    return {
+        "method": "win32_mouse",
+        "window_handle": f"0x{handle:X}",
+        "root_window_handle": f"0x{root:X}",
+    }
 
 
 def _send_ctrl_v(user32) -> None:

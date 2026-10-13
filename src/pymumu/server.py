@@ -12,6 +12,7 @@ import base64
 import os
 import shutil
 import struct
+import threading
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -36,6 +37,7 @@ class ControlRequest(BaseModel):
         "key",
         "launch_app",
         "close_app",
+        "prepare",
     ]
     x: int | None = Field(default=None, ge=0, le=10000)
     y: int | None = Field(default=None, ge=0, le=10000)
@@ -44,6 +46,8 @@ class ControlRequest(BaseModel):
     end_x: int | None = Field(default=None, ge=0, le=10000)
     end_y: int | None = Field(default=None, ge=0, le=10000)
     duration_ms: int = Field(default=300, ge=0, le=10000)
+    screen_width: int | None = Field(default=None, gt=0, le=10000)
+    screen_height: int | None = Field(default=None, gt=0, le=10000)
     text: str | None = Field(default=None, max_length=20000)
     key: str | None = None
     package: str | None = None
@@ -67,15 +71,20 @@ def create_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/emulators", tags=["MuMu control"])
     current_packages: dict[int, str] = {}
+    managers: dict[int, PyMumu] = {}
+    managers_lock = threading.Lock()
 
     def manager(index: int) -> PyMumu:
-        return PyMumu(
-            path=manager_path or os.getenv("PYMUMU_MANAGER_PATH"),
-            index=index,
-            shared_folder_path=(
-                shared_folder_path or os.getenv("PYMUMU_SHARED_FOLDER_PATH")
-            ),
-        )
+        with managers_lock:
+            if index not in managers:
+                managers[index] = PyMumu(
+                    path=manager_path or os.getenv("PYMUMU_MANAGER_PATH"),
+                    index=index,
+                    shared_folder_path=(
+                        shared_folder_path or os.getenv("PYMUMU_SHARED_FOLDER_PATH")
+                    ),
+                )
+            return managers[index]
 
     @router.post("/{index}/control")
     def control(index: int, request: ControlRequest) -> dict[str, Any]:
@@ -92,7 +101,15 @@ def create_router(
             }:
                 x, y = _required(request.x, "x"), _required(request.y, "y")
                 if action == "tap":
-                    result = mumu.tap(x, y)
+                    if request.screen_width and request.screen_height:
+                        result = mumu.tap(
+                            x,
+                            y,
+                            device_width=request.screen_width,
+                            device_height=request.screen_height,
+                        )
+                    else:
+                        result = mumu.tap(x, y)
                 elif action == "double_tap":
                     result = mumu.double_tap(x, y)
                 elif action == "long_press":
@@ -100,15 +117,25 @@ def create_router(
                 else:
                     result = getattr(mumu, action)(x, y)
             elif action == "swipe":
-                result = mumu.swipe(
+                swipe_args = (
                     _required(request.start_x, "start_x"),
                     _required(request.start_y, "start_y"),
                     _required(request.end_x, "end_x"),
                     _required(request.end_y, "end_y"),
                     request.duration_ms,
                 )
+                if request.screen_width and request.screen_height:
+                    result = mumu.swipe(
+                        *swipe_args,
+                        device_width=request.screen_width,
+                        device_height=request.screen_height,
+                    )
+                else:
+                    result = mumu.swipe(*swipe_args)
             elif action == "text":
                 result = mumu.input_text(_required(request.text, "text"))
+            elif action == "prepare":
+                result = mumu.prepare_control()
             elif action == "clear_text":
                 result = mumu.clear_text()
             elif action == "key":

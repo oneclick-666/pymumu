@@ -58,6 +58,59 @@ def test_unicode_text_targets_requested_instance_without_adb(monkeypatch):
     assert pasted == [(int("00B30C7A", 16), "随风而动")]
 
 
+def test_fast_tap_caches_window_and_skips_control_command(monkeypatch):
+    manager_calls = []
+    gestures = []
+
+    def fake_run(cmd, **kwargs):
+        manager_calls.append(cmd)
+        payload = {"render_wnd": "00B30C7A"}
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
+        )()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "pymumu.control.mouse_gesture",
+        lambda *args: gestures.append(args) or {"method": "win32_mouse"},
+    )
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    mumu.tap(100, 200, device_width=1080, device_height=1920)
+    mumu.tap(300, 400, device_width=1080, device_height=1920)
+
+    assert manager_calls == [[r"C:\MuMu\MumuManager.exe", "info", "-v", "3"]]
+    assert gestures == [
+        (int("00B30C7A", 16), 100, 200, 100, 200, 1080, 1920),
+        (int("00B30C7A", 16), 300, 400, 300, 400, 1080, 1920),
+    ]
+
+
+def test_prepare_control_warms_window_cache(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps({"render_wnd": "00B30C7A"}),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    assert mumu.prepare_control() == {"window_handle": "0xB30C7A"}
+    assert mumu._instance_window() == int("00B30C7A", 16)
+    assert calls == [[r"C:\MuMu\MumuManager.exe", "info", "-v", "3"]]
+
+
 def test_instance_window_falls_back_to_main_window():
     assert get_instance_window({"main_wnd": "00840F4E"}) == int("00840F4E", 16)
 
