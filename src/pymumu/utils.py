@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 from typing import Any
 
 try:
@@ -40,20 +41,21 @@ class UtilsMixin:
 
     def _run(self, *args: Any, allowErrors: bool = False, timeout: float = 30):
         cmd = [self.path, *[str(a) for a in args]]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
+        # A launched MuMu process may inherit CLI output handles. Capturing
+        # pipes waits for that child to close them, even after the CLI exits.
+        # Files keep both normal completion and subprocess.run's timeout bounded.
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            result = subprocess.run(cmd, stdout=out, stderr=err, timeout=timeout)
+            out.seek(0)
+            err.seek(0)
+            stdout = out.read().decode("utf-8", errors="replace")
+            stderr = err.read().decode("utf-8", errors="replace")
         if result.returncode != 0:
             if not allowErrors:
-                raise MuMuException(f"Command {' '.join(cmd)} failed: {result.stderr}")
-        if not result.stdout or not result.stdout.strip():
-            return result.stdout
+                raise MuMuException(f"Command {' '.join(cmd)} failed: {stderr}")
+        if not stdout or not stdout.strip():
+            return stdout
         try:
-            return json.loads(result.stdout)
+            return json.loads(stdout)
         except json.JSONDecodeError:
-            return result.stdout
+            return stdout

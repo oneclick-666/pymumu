@@ -38,6 +38,7 @@ def test_unicode_text_targets_requested_instance_without_adb(monkeypatch):
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         payload = {"main_wnd": "00840F4E", "render_wnd": "00B30C7A"}
+        kwargs["stdout"].write(json.dumps(payload).encode())
         return type(
             "Result",
             (),
@@ -65,6 +66,7 @@ def test_fast_tap_caches_window_and_skips_control_command(monkeypatch):
     def fake_run(cmd, **kwargs):
         manager_calls.append(cmd)
         payload = {"render_wnd": "00B30C7A"}
+        kwargs["stdout"].write(json.dumps(payload).encode())
         return type(
             "Result",
             (),
@@ -100,12 +102,14 @@ def test_prepare_waits_for_render_window_before_touch(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         manager_calls.append(cmd)
+        payload = json.dumps(next(responses))
+        kwargs["stdout"].write(payload.encode())
         return type(
             "Result",
             (),
             {
                 "returncode": 0,
-                "stdout": json.dumps(next(responses)),
+                "stdout": payload,
                 "stderr": "",
             },
         )()
@@ -161,6 +165,7 @@ def test_delete_uses_cached_win32_window_and_volume_uses_mumu(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         manager_calls.append(cmd)
+        kwargs["stdout"].write(json.dumps({"render_wnd": "00B30C7A"}).encode())
         return type(
             "Result",
             (),
@@ -283,6 +288,7 @@ def test_prepare_control_warms_window_cache(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        kwargs["stdout"].write(json.dumps({"render_wnd": "00B30C7A"}).encode())
         return type(
             "Result",
             (),
