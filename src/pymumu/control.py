@@ -10,6 +10,9 @@ from .windows_input import (
 
 
 class ControlMixin:
+    _RENDER_WINDOW_WAIT_TIMEOUT = 10.0
+    _RENDER_WINDOW_POLL_INTERVAL = 0.2
+
     def _instance_window(self, index=None, refresh=False):
         idx = index if index is not None else self.index
         cached = getattr(self, "_cached_window_handle", None)
@@ -22,10 +25,23 @@ class ControlMixin:
         idx = index if index is not None else self.index
         cached = getattr(self, "_cached_render_window_handle", None)
         if cached is None or refresh:
-            cached = get_render_window(self.info(index=idx))
+            cached = self._wait_for_render_window(idx)
             self._cached_render_window_handle = cached
             self._cached_window_handle = cached
         return cached
+
+    def _wait_for_render_window(self, index):
+        deadline = time.monotonic() + self._RENDER_WINDOW_WAIT_TIMEOUT
+        while True:
+            try:
+                return get_render_window(self.info(index=index))
+            except RuntimeError as error:
+                if (
+                    str(error) != "MuMu render window is not ready"
+                    or time.monotonic() >= deadline
+                ):
+                    raise
+                time.sleep(self._RENDER_WINDOW_POLL_INTERVAL)
 
     def _mouse_gesture(self, *args, index=None):
         try:
@@ -44,20 +60,12 @@ class ControlMixin:
             return send_key(self._instance_window(index, refresh=True), key)
 
     def prepare_control(self, index=None):
-        """Refresh MuMu HWNDs without caching main_wnd as a touch target."""
+        """Wait for and cache the Android render HWND before accepting input."""
         idx = index if index is not None else self.index
-        info = self.info(index=idx)
-        window_handle = get_instance_window(info)
-        self._cached_window_handle = window_handle
-        try:
-            render_handle = get_render_window(info)
-        except RuntimeError:
-            self._cached_render_window_handle = None
-        else:
-            window_handle = render_handle
-            self._cached_render_window_handle = render_handle
-            self._cached_window_handle = render_handle
-        return {"window_handle": f"0x{window_handle:X}"}
+        render_handle = self._wait_for_render_window(idx)
+        self._cached_render_window_handle = render_handle
+        self._cached_window_handle = render_handle
+        return {"window_handle": f"0x{render_handle:X}"}
 
     # App Control
     def app_install(self, apk_path: str, index=None):

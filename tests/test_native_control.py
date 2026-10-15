@@ -88,7 +88,7 @@ def test_fast_tap_caches_window_and_skips_control_command(monkeypatch):
     ]
 
 
-def test_main_window_from_prepare_is_not_reused_for_touch(monkeypatch):
+def test_prepare_waits_for_render_window_before_touch(monkeypatch):
     manager_calls = []
     gestures = []
     responses = iter(
@@ -115,15 +115,44 @@ def test_main_window_from_prepare_is_not_reused_for_touch(monkeypatch):
         "pymumu.control.mouse_gesture",
         lambda *args: gestures.append(args) or {"method": "win32_mouse"},
     )
+    monkeypatch.setattr("pymumu.control.time.sleep", lambda _delay: None)
     mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
 
-    assert mumu.prepare_control() == {"window_handle": "0x840F4E"}
+    assert mumu.prepare_control() == {"window_handle": "0xB30C7A"}
     mumu.tap(100, 200, device_width=1080, device_height=1920)
 
     assert len(manager_calls) == 2
     assert gestures == [
         (int("00B30C7A", 16), 100, 200, 100, 200, 1080, 1920),
     ]
+
+
+def test_first_touch_waits_for_render_window(monkeypatch):
+    responses = iter(
+        (
+            {"main_wnd": "00840F4E"},
+            {"main_wnd": "00840F4E"},
+            {"render_wnd": "00B30C7A"},
+        )
+    )
+    gestures = []
+
+    monkeypatch.setattr(
+        PyMumu,
+        "info",
+        lambda self, index=None: next(responses),
+    )
+    monkeypatch.setattr("pymumu.control.time.sleep", lambda _delay: None)
+    monkeypatch.setattr(
+        "pymumu.control.mouse_gesture",
+        lambda *args: gestures.append(args) or {"method": "win32_mouse"},
+    )
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.tap(100, 200, device_width=1080, device_height=1920)
+
+    assert result == {"method": "win32_mouse"}
+    assert gestures[0][0] == int("00B30C7A", 16)
 
 
 def test_delete_uses_cached_win32_window_and_volume_uses_mumu(monkeypatch):
