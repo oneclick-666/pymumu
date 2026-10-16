@@ -1,4 +1,7 @@
+import re
 import time
+from urllib.parse import urlsplit
+from xml.etree import ElementTree
 
 from .windows_input import (
     get_instance_window,
@@ -108,6 +111,105 @@ class ControlMixin:
         """Run a MuMu native tool command without invoking the ADB executable."""
         idx = index if index is not None else self.index
         return self._run("control", "-v", idx, "tool", "cmd", "-c", command)
+
+    def open_url(self, url: str, index=None):
+        """Open an HTTP(S) or app deep link through MuMuManager, without ADB."""
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https", "xhsdiscover"}:
+            raise ValueError("Unsupported URL scheme")
+        # The generated XHS link is passed through Android's shell. Escape the
+        # few characters with meaning inside a double-quoted shell argument.
+        quoted = url.replace("\\", "\\\\").replace('"', '\\"')
+        quoted = quoted.replace("$", "\\$").replace("`", "\\`")
+        return self.tool_command(
+            f'am start -a android.intent.action.VIEW -d "{quoted}"', index=index
+        )
+
+    @staticmethod
+    def _ui_xml(value):
+        text = value if isinstance(value, str) else str(value or "")
+        start = text.find("<?xml")
+        if start < 0:
+            start = text.find("<hierarchy")
+        end = text.rfind("</hierarchy>")
+        if start >= 0 and end < start:
+            empty = re.match(r"<hierarchy\b[^>]*/>", text[start:])
+            if empty:
+                return empty.group(0)
+        if start < 0 or end < start:
+            raise RuntimeError("MuMu UI hierarchy is not ready")
+        return text[start : end + len("</hierarchy>")]
+
+    def _dump_ui_xml(self, index=None):
+        """Read Android's UI hierarchy through MuMuManager's command channel."""
+        try:
+            return self._ui_xml(
+                self.tool_command("uiautomator dump /dev/tty", index=index)
+            )
+        except RuntimeError:
+            # Some MuMu/Android combinations only support a regular output file.
+            # Keep the whole operation inside `MuMuManager tool cmd`; no ADB is used.
+            output = self.tool_command(
+                "uiautomator dump /sdcard/autoglm-window.xml >/dev/null "
+                "&& cat /sdcard/autoglm-window.xml "
+                "; rm -f /sdcard/autoglm-window.xml",
+                index=index,
+            )
+            return self._ui_xml(output)
+
+    @staticmethod
+    def _matching_ui_node(root, text, resource_id=None, class_name=None):
+        for node in root.iter("node"):
+            if node.attrib.get("text") != text:
+                continue
+            if resource_id and node.attrib.get("resource-id") != resource_id:
+                continue
+            if class_name and node.attrib.get("class") != class_name:
+                continue
+            return node
+        return None
+
+    def find_and_tap(
+        self,
+        *,
+        text: str,
+        resource_id: str | None = None,
+        class_name: str | None = None,
+        timeout_ms: int = 30000,
+        wait_until_gone: bool = False,
+        index=None,
+    ):
+        """Wait for one Android UI node and tap its center through MuMuManager."""
+        idx = index if index is not None else self.index
+        deadline = time.monotonic() + max(0, timeout_ms) / 1000
+        last_error = "element not found"
+        while True:
+            try:
+                root = ElementTree.fromstring(self._dump_ui_xml(index=idx))
+                node = self._matching_ui_node(root, text, resource_id, class_name)
+                if node is not None:
+                    bounds = node.attrib.get("bounds", "")
+                    match = re.fullmatch(r"\[(\d+),(\d+)]\[(\d+),(\d+)]", bounds)
+                    if not match:
+                        raise RuntimeError("Matched UI element has invalid bounds")
+                    left, top, right, bottom = map(int, match.groups())
+                    self.tool_tap((left + right) // 2, (top + bottom) // 2, index=idx)
+                    if not wait_until_gone:
+                        return {"text": text, "bounds": bounds}
+                    while time.monotonic() < deadline:
+                        time.sleep(0.5)
+                        current = ElementTree.fromstring(self._dump_ui_xml(index=idx))
+                        if self._matching_ui_node(
+                            current, text, resource_id, class_name
+                        ) is None:
+                            return {"text": text, "bounds": bounds, "gone": True}
+                    raise RuntimeError(f"UI element did not disappear: {text}")
+                last_error = f"UI element not found: {text}"
+            except (ElementTree.ParseError, RuntimeError) as error:
+                last_error = str(error)
+            if time.monotonic() >= deadline:
+                raise RuntimeError(last_error)
+            time.sleep(0.5)
 
     def tool_tap(
         self,

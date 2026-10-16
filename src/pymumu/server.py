@@ -38,6 +38,8 @@ class ControlRequest(BaseModel):
         "launch_app",
         "close_app",
         "prepare",
+        "open_url",
+        "find_and_tap",
     ]
     x: int | None = Field(default=None, ge=0, le=10000)
     y: int | None = Field(default=None, ge=0, le=10000)
@@ -51,6 +53,12 @@ class ControlRequest(BaseModel):
     text: str | None = Field(default=None, max_length=20000)
     key: str | None = None
     package: str | None = None
+    url: str | None = Field(default=None, max_length=4096)
+    selector_text: str | None = Field(default=None, max_length=200)
+    resource_id: str | None = Field(default=None, max_length=300)
+    class_name: str | None = Field(default=None, max_length=300)
+    timeout_ms: int = Field(default=30000, ge=0, le=120000)
+    wait_until_gone: bool = False
 
 
 def _required(value: Any, name: str) -> Any:
@@ -146,6 +154,16 @@ def create_router(
                 package = _required(request.package, "package")
                 result = mumu.app_launch(package)
                 current_packages[index] = package
+            elif action == "open_url":
+                result = mumu.open_url(_required(request.url, "url"))
+            elif action == "find_and_tap":
+                result = mumu.find_and_tap(
+                    text=_required(request.selector_text, "selector_text"),
+                    resource_id=request.resource_id,
+                    class_name=request.class_name,
+                    timeout_ms=request.timeout_ms,
+                    wait_until_gone=request.wait_until_gone,
+                )
             else:
                 package = _required(request.package, "package")
                 result = mumu.app_close(package)

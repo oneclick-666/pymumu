@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from pymumu import PyMumu, windows_input
 from pymumu.windows_input import get_instance_window, get_render_window
 
@@ -305,6 +307,82 @@ def test_prepare_control_warms_window_cache(monkeypatch):
     assert mumu.prepare_control() == {"window_handle": "0xB30C7A"}
     assert mumu._instance_window() == int("00B30C7A", 16)
     assert calls == [[r"C:\MuMu\MumuManager.exe", "info", "-v", "3"]]
+
+
+def test_open_url_and_ui_selector_use_only_mumu_manager(monkeypatch):
+    calls = []
+    hierarchy = """<?xml version="1.0" encoding="UTF-8"?><hierarchy><node text="添加标题" resource-id="com.xingin.xhs:id/0_resource_name_obfuscated" class="android.widget.EditText" bounds="[100,200][500,300]" /></hierarchy>"""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        value = hierarchy if "uiautomator dump" in " ".join(cmd) else ""
+        kwargs["stdout"].write(value.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+    mumu.open_url("xhsdiscover://js_share_sdk?share_code=one%26two")
+    result = mumu.find_and_tap(
+        text="添加标题",
+        resource_id="com.xingin.xhs:id/0_resource_name_obfuscated",
+        class_name="android.widget.EditText",
+        timeout_ms=0,
+    )
+    assert result["bounds"] == "[100,200][500,300]"
+    command_text = "\n".join(" ".join(call) for call in calls)
+    assert "android.intent.action.VIEW" in command_text
+    assert "uiautomator dump /dev/tty" in command_text
+    assert "input tap 300 250" in command_text
+    assert "adb" not in command_text.lower()
+
+
+def test_open_url_rejects_unsafe_scheme(monkeypatch):
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+    with pytest.raises(ValueError, match="Unsupported URL scheme"):
+        mumu.open_url("file:///etc/passwd")
+
+
+def test_ui_selector_falls_back_to_regular_xml_file(monkeypatch):
+    calls = []
+    hierarchy = '<hierarchy><node text="发布笔记" bounds="[10,20][110,80]" /></hierarchy>'
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        command = " ".join(cmd)
+        value = "UI hierarchy dumped" if "/dev/tty" in command else hierarchy
+        kwargs["stdout"].write(value.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+    result = mumu.find_and_tap(text="发布笔记", timeout_ms=0)
+
+    assert result["bounds"] == "[10,20][110,80]"
+    command_text = "\n".join(" ".join(call) for call in calls)
+    assert "cat /sdcard/autoglm-window.xml" in command_text
+    assert "input tap 60 50" in command_text
+    assert "adb" not in command_text.lower()
+
+
+def test_ui_selector_can_wait_until_button_disappears(monkeypatch):
+    hierarchy = '<hierarchy><node text="发布笔记" bounds="[10,20][110,80]" /></hierarchy>'
+    dumps = iter([hierarchy, "<hierarchy />"])
+
+    def fake_run(cmd, **kwargs):
+        command = " ".join(cmd)
+        value = next(dumps) if "uiautomator dump" in command else ""
+        kwargs["stdout"].write(value.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    monkeypatch.setattr("pymumu.control.time.sleep", lambda _seconds: None)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.find_and_tap(
+        text="发布笔记", timeout_ms=1000, wait_until_gone=True
+    )
+
+    assert result["gone"] is True
 
 
 def test_instance_window_falls_back_to_main_window():
