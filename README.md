@@ -200,9 +200,6 @@ The service exposes native MuMu controls at:
 - `GET /api/v1/emulators/{index}/current-app`
 - `POST /api/v1/emulators/{index}/files`
 
-The control endpoint also provides a `screen_size` action for coordinate
-selection. It runs `wm size` through `MumuManager.exe` and does not use UI dumps.
-
 These routes execute `MumuManager.exe` and never execute `adb.exe`. If an
 existing FastAPI application already manages MuMu instance lifecycle, mount
 the router into it so lifecycle and control share one base URL:

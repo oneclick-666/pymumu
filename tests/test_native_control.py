@@ -345,23 +345,6 @@ def test_open_url_treats_stuck_manager_cli_as_dispatched(monkeypatch):
     assert result == {"dispatched": True, "manager_cli_timed_out": True}
 
 
-def test_screen_size_prefers_override_and_falls_back_to_physical(monkeypatch):
-    outputs = iter((
-        "Physical size: 2160x3840\nOverride size: 1440x2560\n",
-        "Physical size: 2160x3840\n",
-    ))
-
-    def fake_run(_cmd, **kwargs):
-        kwargs["stdout"].write(next(outputs).encode())
-        return type("Result", (), {"returncode": 0})()
-
-    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
-    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
-
-    assert mumu.screen_size() == {"width": 1440, "height": 2560}
-    assert mumu.screen_size() == {"width": 2160, "height": 3840}
-
-
 def test_instance_window_falls_back_to_main_window():
     assert get_instance_window({"main_wnd": "00840F4E"}) == int("00840F4E", 16)
 

@@ -1,4 +1,3 @@
-import re
 import subprocess
 import time
 from urllib.parse import urlsplit
@@ -134,22 +133,6 @@ class ControlMixin:
             # Android intent has already been delivered. subprocess.run kills
             # only that CLI process; the launched Android activity keeps running.
             return {"dispatched": True, "manager_cli_timed_out": True}
-
-    def screen_size(self, index=None):
-        """Read Android's effective screen size through MuMuManager, without ADB."""
-        idx = index if index is not None else self.index
-        output = str(self.tool_command("wm size", index=idx, timeout=5) or "")
-        override = re.search(r"Override size:\s*(\d+)x(\d+)", output, re.IGNORECASE)
-        physical = re.search(r"Physical size:\s*(\d+)x(\d+)", output, re.IGNORECASE)
-        match = override or physical or re.search(r"\b(\d+)x(\d+)\b", output)
-        if not match:
-            raise RuntimeError(
-                f"Unable to parse MuMu screen size: {output.strip() or 'empty output'}"
-            )
-        width, height = map(int, match.groups())
-        if width <= 0 or height <= 0:
-            raise RuntimeError("MuMu returned an invalid screen size")
-        return {"width": width, "height": height}
 
     def tool_tap(
         self,

@@ -39,7 +39,6 @@ class ControlRequest(BaseModel):
         "close_app",
         "prepare",
         "open_url",
-        "screen_size",
     ]
     x: int | None = Field(default=None, ge=0, le=10000)
     y: int | None = Field(default=None, ge=0, le=10000)
@@ -151,8 +150,6 @@ def create_router(
                 current_packages[index] = package
             elif action == "open_url":
                 result = mumu.open_url(_required(request.url, "url"))
-            elif action == "screen_size":
-                result = mumu.screen_size()
             else:
                 package = _required(request.package, "package")
                 result = mumu.app_close(package)
