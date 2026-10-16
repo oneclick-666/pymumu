@@ -135,28 +135,6 @@ class ControlMixin:
             # only that CLI process; the launched Android activity keeps running.
             return {"dispatched": True, "manager_cli_timed_out": True}
 
-    def is_process_running(self, package: str, index=None):
-        """Check an Android package process through MuMuManager, without ADB."""
-        if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package):
-            raise ValueError("Invalid Android package name")
-        idx = index if index is not None else self.index
-        running_marker = "__PYMUMU_PROCESS_RUNNING__"
-        stopped_marker = "__PYMUMU_PROCESS_STOPPED__"
-        output = self.tool_command(
-            f"if pidof {package} >/dev/null 2>&1; then "
-            f"echo {running_marker}; else echo {stopped_marker}; fi",
-            index=idx,
-            timeout=5,
-        )
-        result = str(output or "")
-        if running_marker in result:
-            running = True
-        elif stopped_marker in result:
-            running = False
-        else:
-            raise RuntimeError("MuMu did not return the Android process state")
-        return {"package": package, "running": running}
-
     def screen_size(self, index=None):
         """Read Android's effective screen size through MuMuManager, without ADB."""
         idx = index if index is not None else self.index

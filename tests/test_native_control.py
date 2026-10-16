@@ -345,38 +345,6 @@ def test_open_url_treats_stuck_manager_cli_as_dispatched(monkeypatch):
     assert result == {"dispatched": True, "manager_cli_timed_out": True}
 
 
-def test_process_detection_uses_pidof_through_mumu_manager(monkeypatch):
-    calls = []
-    outputs = iter(("__PYMUMU_PROCESS_RUNNING__\n", "__PYMUMU_PROCESS_STOPPED__\n"))
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        kwargs["stdout"].write(next(outputs).encode())
-        return type("Result", (), {"returncode": 0})()
-
-    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
-    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
-
-    assert mumu.is_process_running("com.xingin.xhs") == {
-        "package": "com.xingin.xhs",
-        "running": True,
-    }
-    assert mumu.is_process_running("com.xingin.xhs") == {
-        "package": "com.xingin.xhs",
-        "running": False,
-    }
-    command_text = "\n".join(" ".join(call) for call in calls)
-    assert "pidof com.xingin.xhs" in command_text
-    assert "adb" not in command_text.lower()
-
-
-def test_process_detection_rejects_invalid_package():
-    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
-
-    with pytest.raises(ValueError, match="Invalid Android package name"):
-        mumu.is_process_running("com.xingin.xhs; id")
-
-
 def test_screen_size_prefers_override_and_falls_back_to_physical(monkeypatch):
     outputs = iter((
         "Physical size: 2160x3840\nOverride size: 1440x2560\n",

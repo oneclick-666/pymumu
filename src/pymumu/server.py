@@ -39,7 +39,6 @@ class ControlRequest(BaseModel):
         "close_app",
         "prepare",
         "open_url",
-        "is_process_running",
         "screen_size",
     ]
     x: int | None = Field(default=None, ge=0, le=10000)
@@ -152,8 +151,6 @@ def create_router(
                 current_packages[index] = package
             elif action == "open_url":
                 result = mumu.open_url(_required(request.url, "url"))
-            elif action == "is_process_running":
-                result = mumu.is_process_running(_required(request.package, "package"))
             elif action == "screen_size":
                 result = mumu.screen_size()
             else:
