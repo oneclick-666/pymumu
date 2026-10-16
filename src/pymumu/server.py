@@ -55,9 +55,18 @@ class ControlRequest(BaseModel):
     package: str | None = None
     url: str | None = Field(default=None, max_length=4096)
     selector_text: str | None = Field(default=None, max_length=200)
+    text_contains: str | None = Field(default=None, max_length=200)
     resource_id: str | None = Field(default=None, max_length=300)
     class_name: str | None = Field(default=None, max_length=300)
+    package_name: str | None = Field(default=None, max_length=300)
+    selector_index: int = Field(default=0, ge=0, le=100)
+    clickable: bool | None = None
+    enabled: bool | None = None
+    required_text: str | None = Field(default=None, max_length=300)
+    required_text_contains: str | None = Field(default=None, max_length=300)
     timeout_ms: int = Field(default=30000, ge=0, le=120000)
+    optional: bool = False
+    wait_until_focused: bool = False
     wait_until_gone: bool = False
 
 
@@ -158,10 +167,19 @@ def create_router(
                 result = mumu.open_url(_required(request.url, "url"))
             elif action == "find_and_tap":
                 result = mumu.find_and_tap(
-                    text=_required(request.selector_text, "selector_text"),
+                    text=request.selector_text,
+                    text_contains=request.text_contains,
                     resource_id=request.resource_id,
                     class_name=request.class_name,
+                    package_name=request.package_name,
+                    selector_index=request.selector_index,
+                    clickable=request.clickable,
+                    enabled=request.enabled,
+                    required_text=request.required_text,
+                    required_text_contains=request.required_text_contains,
                     timeout_ms=request.timeout_ms,
+                    optional=request.optional,
+                    wait_until_focused=request.wait_until_focused,
                     wait_until_gone=request.wait_until_gone,
                 )
             else:

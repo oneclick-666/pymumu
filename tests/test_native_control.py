@@ -385,6 +385,110 @@ def test_ui_selector_can_wait_until_button_disappears(monkeypatch):
     assert result["gone"] is True
 
 
+def test_ui_selector_uses_edit_text_order_and_verifies_focus(monkeypatch):
+    before = """<hierarchy>
+      <node text="新版标题提示" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" focused="false" bounds="[60,944][2160,1144]" />
+      <node text="新版正文提示" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" focused="false" bounds="[0,1144][2160,2192]" />
+    </hierarchy>"""
+    after = before.replace('text="新版正文提示"', 'text=""').replace(
+        'focused="false" bounds="[0,1144]',
+        'focused="true" bounds="[0,1144]',
+        1,
+    )
+    dumps = iter([before, after])
+
+    def fake_run(cmd, **kwargs):
+        command = " ".join(cmd)
+        value = next(dumps) if "uiautomator dump" in command else ""
+        kwargs["stdout"].write(value.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    monkeypatch.setattr("pymumu.control.time.sleep", lambda _seconds: None)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.find_and_tap(
+        class_name="android.widget.EditText",
+        package_name="com.xingin.xhs",
+        selector_index=1,
+        clickable=True,
+        enabled=True,
+        timeout_ms=1000,
+        wait_until_focused=True,
+    )
+
+    assert result["focused"] is True
+    assert result["bounds"] == "[0,1144][2160,2192]"
+
+
+def test_optional_popup_cancel_requires_matching_dialog_title(monkeypatch):
+    unrelated = """<hierarchy>
+      <node text="其他弹窗" class="android.widget.TextView" package="com.xingin.xhs" enabled="true" bounds="[0,0][100,50]" />
+      <node text="取消" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" enabled="true" bounds="[10,60][90,100]" />
+    </hierarchy>"""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        command = " ".join(cmd)
+        value = unrelated if "uiautomator dump" in command else ""
+        kwargs["stdout"].write(value.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.find_and_tap(
+        text="取消",
+        class_name="android.widget.TextView",
+        package_name="com.xingin.xhs",
+        clickable=True,
+        enabled=True,
+        required_text="申请获取您的相册内容位置信息",
+        timeout_ms=0,
+        optional=True,
+        wait_until_gone=True,
+    )
+
+    assert result == {"found": False}
+    assert not any("input tap" in " ".join(call) for call in calls)
+
+
+def test_permission_popup_cancel_is_clicked_and_verified_gone(monkeypatch):
+    popup = """<hierarchy>
+      <node text="申请获取您的相册内容位置信息" class="android.widget.TextView" package="com.xingin.xhs" enabled="true" bounds="[108,2094][1332,2149]" />
+      <node text="取消" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" enabled="true" bounds="[204,2365][702,2485]" />
+    </hierarchy>"""
+    dumps = iter([popup, "<hierarchy />"])
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        command = " ".join(cmd)
+        value = next(dumps) if "uiautomator dump" in command else ""
+        kwargs["stdout"].write(value.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    monkeypatch.setattr("pymumu.control.time.sleep", lambda _seconds: None)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.find_and_tap(
+        text="取消",
+        class_name="android.widget.TextView",
+        package_name="com.xingin.xhs",
+        clickable=True,
+        enabled=True,
+        required_text="申请获取您的相册内容位置信息",
+        timeout_ms=1000,
+        optional=True,
+        wait_until_gone=True,
+    )
+
+    assert result["gone"] is True
+    assert any("input tap 453 2425" in " ".join(call) for call in calls)
+
+
 def test_instance_window_falls_back_to_main_window():
     assert get_instance_window({"main_wnd": "00840F4E"}) == int("00840F4E", 16)
 

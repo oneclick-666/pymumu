@@ -158,35 +158,93 @@ class ControlMixin:
             return self._ui_xml(output)
 
     @staticmethod
-    def _matching_ui_node(root, text, resource_id=None, class_name=None):
+    def _matching_ui_nodes(
+        root,
+        *,
+        text=None,
+        text_contains=None,
+        resource_id=None,
+        class_name=None,
+        package_name=None,
+        clickable=None,
+        enabled=None,
+    ):
+        matches = []
         for node in root.iter("node"):
-            if node.attrib.get("text") != text:
+            attributes = node.attrib
+            node_text = attributes.get("text", "")
+            if text is not None and node_text != text:
                 continue
-            if resource_id and node.attrib.get("resource-id") != resource_id:
+            if text_contains is not None and text_contains not in node_text:
                 continue
-            if class_name and node.attrib.get("class") != class_name:
+            if resource_id and attributes.get("resource-id") != resource_id:
                 continue
-            return node
-        return None
+            if class_name and attributes.get("class") != class_name:
+                continue
+            if package_name and attributes.get("package") != package_name:
+                continue
+            if clickable is not None and attributes.get("clickable") != str(clickable).lower():
+                continue
+            if enabled is not None and attributes.get("enabled") != str(enabled).lower():
+                continue
+            matches.append(node)
+        return matches
 
     def find_and_tap(
         self,
         *,
-        text: str,
+        text: str | None = None,
+        text_contains: str | None = None,
         resource_id: str | None = None,
         class_name: str | None = None,
+        package_name: str | None = None,
+        selector_index: int = 0,
+        clickable: bool | None = None,
+        enabled: bool | None = None,
+        required_text: str | None = None,
+        required_text_contains: str | None = None,
         timeout_ms: int = 30000,
+        optional: bool = False,
+        wait_until_focused: bool = False,
         wait_until_gone: bool = False,
         index=None,
     ):
         """Wait for one Android UI node and tap its center through MuMuManager."""
+        if not any((text, text_contains, resource_id, class_name, package_name)):
+            raise ValueError("At least one UI selector is required")
+        if selector_index < 0:
+            raise ValueError("selector_index must be non-negative")
         idx = index if index is not None else self.index
         deadline = time.monotonic() + max(0, timeout_ms) / 1000
         last_error = "element not found"
+
+        def find(root):
+            if required_text is not None or required_text_contains is not None:
+                guards = self._matching_ui_nodes(
+                    root,
+                    text=required_text,
+                    text_contains=required_text_contains,
+                    package_name=package_name,
+                    enabled=True,
+                )
+                if not guards:
+                    return None
+            matches = self._matching_ui_nodes(
+                root,
+                text=text,
+                text_contains=text_contains,
+                resource_id=resource_id,
+                class_name=class_name,
+                package_name=package_name,
+                clickable=clickable,
+                enabled=enabled,
+            )
+            return matches[selector_index] if selector_index < len(matches) else None
+
         while True:
             try:
                 root = ElementTree.fromstring(self._dump_ui_xml(index=idx))
-                node = self._matching_ui_node(root, text, resource_id, class_name)
+                node = find(root)
                 if node is not None:
                     bounds = node.attrib.get("bounds", "")
                     match = re.fullmatch(r"\[(\d+),(\d+)]\[(\d+),(\d+)]", bounds)
@@ -194,20 +252,38 @@ class ControlMixin:
                         raise RuntimeError("Matched UI element has invalid bounds")
                     left, top, right, bottom = map(int, match.groups())
                     self.tool_tap((left + right) // 2, (top + bottom) // 2, index=idx)
-                    if not wait_until_gone:
-                        return {"text": text, "bounds": bounds}
+                    if not wait_until_focused and not wait_until_gone:
+                        return {"text": node.attrib.get("text", ""), "bounds": bounds}
                     while time.monotonic() < deadline:
                         time.sleep(0.5)
                         current = ElementTree.fromstring(self._dump_ui_xml(index=idx))
-                        if self._matching_ui_node(
-                            current, text, resource_id, class_name
-                        ) is None:
-                            return {"text": text, "bounds": bounds, "gone": True}
-                    raise RuntimeError(f"UI element did not disappear: {text}")
-                last_error = f"UI element not found: {text}"
+                        current_node = find(current)
+                        if wait_until_gone and current_node is None:
+                            return {
+                                "text": node.attrib.get("text", ""),
+                                "bounds": bounds,
+                                "gone": True,
+                            }
+                        if (
+                            wait_until_focused
+                            and current_node is not None
+                            and current_node.attrib.get("focused") == "true"
+                        ):
+                            return {
+                                "text": current_node.attrib.get("text", ""),
+                                "bounds": current_node.attrib.get("bounds", bounds),
+                                "focused": True,
+                            }
+                    expected = text or text_contains or class_name or package_name
+                    state = "disappear" if wait_until_gone else "receive focus"
+                    raise RuntimeError(f"UI element did not {state}: {expected}")
+                expected = text or text_contains or class_name or package_name
+                last_error = f"UI element not found: {expected} (index {selector_index})"
             except (ElementTree.ParseError, RuntimeError) as error:
                 last_error = str(error)
             if time.monotonic() >= deadline:
+                if optional:
+                    return {"found": False}
                 raise RuntimeError(last_error)
             time.sleep(0.5)
 
