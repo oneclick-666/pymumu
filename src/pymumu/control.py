@@ -108,10 +108,12 @@ class ControlMixin:
         idx = index if index is not None else self.index
         return self._run("control", "-v", idx, "tool", "func", "--name", name)
 
-    def tool_command(self, command: str, index=None):
+    def tool_command(self, command: str, index=None, timeout=30):
         """Run a MuMu native tool command without invoking the ADB executable."""
         idx = index if index is not None else self.index
-        return self._run("control", "-v", idx, "tool", "cmd", "-c", command)
+        return self._run(
+            "control", "-v", idx, "tool", "cmd", "-c", command, timeout=timeout
+        )
 
     def open_url(self, url: str, index=None):
         """Open an HTTP(S) or app deep link through MuMuManager, without ADB."""
@@ -153,9 +155,11 @@ class ControlMixin:
         """Read Android's UI hierarchy through MuMuManager's command channel."""
         try:
             return self._ui_xml(
-                self.tool_command("uiautomator dump /dev/tty", index=index)
+                self.tool_command(
+                    "uiautomator dump /dev/tty", index=index, timeout=8
+                )
             )
-        except RuntimeError:
+        except (RuntimeError, subprocess.TimeoutExpired):
             # Some MuMu/Android combinations only support a regular output file.
             # Keep the whole operation inside `MuMuManager tool cmd`; no ADB is used.
             output = self.tool_command(
@@ -163,6 +167,7 @@ class ControlMixin:
                 "&& cat /sdcard/autoglm-window.xml "
                 "; rm -f /sdcard/autoglm-window.xml",
                 index=index,
+                timeout=8,
             )
             return self._ui_xml(output)
 
@@ -288,7 +293,11 @@ class ControlMixin:
                     raise RuntimeError(f"UI element did not {state}: {expected}")
                 expected = text or text_contains or class_name or package_name
                 last_error = f"UI element not found: {expected} (index {selector_index})"
-            except (ElementTree.ParseError, RuntimeError) as error:
+            except (
+                ElementTree.ParseError,
+                RuntimeError,
+                subprocess.TimeoutExpired,
+            ) as error:
                 last_error = str(error)
             if time.monotonic() >= deadline:
                 if optional:
@@ -385,7 +394,11 @@ class ControlMixin:
                         "required_matches": len(guards),
                         "dismissed": dismissed,
                     }
-            except (ElementTree.ParseError, RuntimeError):
+            except (
+                ElementTree.ParseError,
+                RuntimeError,
+                subprocess.TimeoutExpired,
+            ):
                 pass
             if time.monotonic() >= deadline:
                 raise RuntimeError(
