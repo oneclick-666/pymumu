@@ -342,6 +342,18 @@ def test_open_url_rejects_unsafe_scheme(monkeypatch):
         mumu.open_url("file:///etc/passwd")
 
 
+def test_open_url_treats_stuck_manager_cli_as_dispatched(monkeypatch):
+    def fake_run(_cmd, **_kwargs):
+        raise __import__("subprocess").TimeoutExpired("MuMuManager.exe", 8)
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.open_url("xhsdiscover://js_share_sdk?share_code=code")
+
+    assert result == {"dispatched": True, "manager_cli_timed_out": True}
+
+
 def test_ui_selector_falls_back_to_regular_xml_file(monkeypatch):
     calls = []
     hierarchy = '<hierarchy><node text="发布笔记" bounds="[10,20][110,80]" /></hierarchy>'
@@ -419,6 +431,96 @@ def test_ui_selector_uses_edit_text_order_and_verifies_focus(monkeypatch):
 
     assert result["focused"] is True
     assert result["bounds"] == "[0,1144][2160,2192]"
+
+
+def test_wait_for_ui_requires_complete_publish_page_in_one_snapshot(monkeypatch):
+    incomplete = """<hierarchy>
+      <node text="添加标题" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="发布笔记" class="android.widget.Button" package="com.xingin.xhs" clickable="true" enabled="true" />
+    </hierarchy>"""
+    complete = """<hierarchy>
+      <node text="添加标题" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="添加作品描述" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="发布笔记" class="android.widget.Button" package="com.xingin.xhs" clickable="true" enabled="true" />
+    </hierarchy>"""
+    dumps = iter([incomplete, complete])
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        command = " ".join(cmd)
+        value = next(dumps) if "uiautomator dump" in command else ""
+        kwargs["stdout"].write(value.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    monkeypatch.setattr("pymumu.control.time.sleep", lambda _seconds: None)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.wait_for_ui(
+        class_name="android.widget.EditText",
+        package_name="com.xingin.xhs",
+        minimum_matches=2,
+        clickable=True,
+        enabled=True,
+        required_text="发布笔记",
+        required_class_name="android.widget.Button",
+        required_clickable=True,
+        required_enabled=True,
+        timeout_ms=1000,
+    )
+
+    assert result == {
+        "ready": True,
+        "matches": 2,
+        "required_matches": 1,
+        "dismissed": 0,
+    }
+    assert not any("input tap" in " ".join(call) for call in calls)
+
+
+def test_wait_for_ui_dismisses_late_permission_popup(monkeypatch):
+    popup = """<hierarchy>
+      <node text="申请获取您的相册内容位置信息" class="android.widget.TextView" package="com.xingin.xhs" enabled="true" />
+      <node text="取消" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" enabled="true" bounds="[204,2365][702,2485]" />
+    </hierarchy>"""
+    page = """<hierarchy>
+      <node text="添加标题" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="添加作品描述" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="发布笔记" class="android.widget.Button" package="com.xingin.xhs" clickable="true" enabled="true" />
+    </hierarchy>"""
+    dumps = iter([popup, page])
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        command = " ".join(cmd)
+        value = next(dumps) if "uiautomator dump" in command else ""
+        kwargs["stdout"].write(value.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    monkeypatch.setattr("pymumu.control.time.sleep", lambda _seconds: None)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.wait_for_ui(
+        class_name="android.widget.EditText",
+        package_name="com.xingin.xhs",
+        minimum_matches=2,
+        clickable=True,
+        enabled=True,
+        required_text="发布笔记",
+        required_class_name="android.widget.Button",
+        required_clickable=True,
+        required_enabled=True,
+        dismiss_text="取消",
+        dismiss_class_name="android.widget.TextView",
+        dismiss_required_text="申请获取您的相册内容位置信息",
+        timeout_ms=1000,
+    )
+
+    assert result["dismissed"] == 1
+    assert any("input tap 453 2425" in " ".join(call) for call in calls)
 
 
 def test_optional_popup_cancel_requires_matching_dialog_title(monkeypatch):

@@ -40,6 +40,7 @@ class ControlRequest(BaseModel):
         "prepare",
         "open_url",
         "find_and_tap",
+        "wait_for_ui",
     ]
     x: int | None = Field(default=None, ge=0, le=10000)
     y: int | None = Field(default=None, ge=0, le=10000)
@@ -64,6 +65,13 @@ class ControlRequest(BaseModel):
     enabled: bool | None = None
     required_text: str | None = Field(default=None, max_length=300)
     required_text_contains: str | None = Field(default=None, max_length=300)
+    required_class_name: str | None = Field(default=None, max_length=300)
+    required_clickable: bool | None = None
+    required_enabled: bool | None = None
+    dismiss_text: str | None = Field(default=None, max_length=300)
+    dismiss_class_name: str | None = Field(default=None, max_length=300)
+    dismiss_required_text: str | None = Field(default=None, max_length=300)
+    minimum_matches: int = Field(default=1, ge=1, le=100)
     timeout_ms: int = Field(default=30000, ge=0, le=120000)
     optional: bool = False
     wait_until_focused: bool = False
@@ -181,6 +189,23 @@ def create_router(
                     optional=request.optional,
                     wait_until_focused=request.wait_until_focused,
                     wait_until_gone=request.wait_until_gone,
+                )
+            elif action == "wait_for_ui":
+                result = mumu.wait_for_ui(
+                    class_name=_required(request.class_name, "class_name"),
+                    package_name=request.package_name,
+                    minimum_matches=request.minimum_matches,
+                    clickable=request.clickable,
+                    enabled=request.enabled,
+                    required_text=request.required_text,
+                    required_text_contains=request.required_text_contains,
+                    required_class_name=request.required_class_name,
+                    required_clickable=request.required_clickable,
+                    required_enabled=request.required_enabled,
+                    dismiss_text=request.dismiss_text,
+                    dismiss_class_name=request.dismiss_class_name,
+                    dismiss_required_text=request.dismiss_required_text,
+                    timeout_ms=request.timeout_ms,
                 )
             else:
                 package = _required(request.package, "package")
