@@ -154,21 +154,36 @@ class ControlMixin:
 
     def _dump_ui_xml(self, index=None):
         """Read Android's UI hierarchy through MuMuManager's command channel."""
+        idx = index if index is not None else self.index
+        # MuMuManager can keep a foreground `uiautomator dump` command alive
+        # after Android has started producing the hierarchy. Launch exactly one
+        # detached dump, then read its uniquely named result through a separate
+        # native command. Avoiding a preceding /dev/tty dump also prevents an
+        # orphaned first process from blocking the file-producing process.
+        path = f"/sdcard/autoglm-window-{idx}-{time.monotonic_ns()}.xml"
+        launch_output = ""
         try:
-            return self._ui_xml(
-                self.tool_command(
-                    "uiautomator dump /dev/tty", index=index, timeout=8
-                )
+            launch_output = self.tool_command(
+                f"rm -f {path}; "
+                f"(uiautomator dump {path} </dev/null >/dev/null 2>&1) &",
+                index=idx,
+                timeout=2,
             )
-        except (RuntimeError, subprocess.TimeoutExpired):
-            # Some MuMu/Android combinations only support a regular output file.
-            # Keep the whole operation inside `MuMuManager tool cmd`; no ADB is used.
+        except (MuMuException, subprocess.TimeoutExpired):
+            # The detached Android command can continue after its manager
+            # wrapper is terminated, so still try to read the result.
+            pass
+        try:
+            return self._ui_xml(launch_output)
+        except RuntimeError:
             output = self.tool_command(
-                "uiautomator dump /sdcard/autoglm-window.xml >/dev/null "
-                "&& cat /sdcard/autoglm-window.xml "
-                "; rm -f /sdcard/autoglm-window.xml",
-                index=index,
-                timeout=8,
+                "i=0; "
+                f"while [ \"$i\" -lt 10 ]; do "
+                f"if [ -s {path} ]; then cat {path}; rm -f {path}; exit 0; fi; "
+                "sleep 1; i=$((i + 1)); done; "
+                f"rm -f {path}; exit 1",
+                index=idx,
+                timeout=12,
             )
             return self._ui_xml(output)
 

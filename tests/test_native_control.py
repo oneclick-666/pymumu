@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
@@ -331,7 +332,7 @@ def test_open_url_and_ui_selector_use_only_mumu_manager(monkeypatch):
     assert result["bounds"] == "[100,200][500,300]"
     command_text = "\n".join(" ".join(call) for call in calls)
     assert "android.intent.action.VIEW" in command_text
-    assert "uiautomator dump /dev/tty" in command_text
+    assert "uiautomator dump /sdcard/autoglm-window-3-" in command_text
     assert "input tap 300 250" in command_text
     assert "adb" not in command_text.lower()
 
@@ -354,14 +355,14 @@ def test_open_url_treats_stuck_manager_cli_as_dispatched(monkeypatch):
     assert result == {"dispatched": True, "manager_cli_timed_out": True}
 
 
-def test_ui_selector_falls_back_to_regular_xml_file(monkeypatch):
+def test_ui_selector_reads_regular_xml_file(monkeypatch):
     calls = []
     hierarchy = '<hierarchy><node text="发布笔记" bounds="[10,20][110,80]" /></hierarchy>'
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         command = " ".join(cmd)
-        value = "UI hierarchy dumped" if "/dev/tty" in command else hierarchy
+        value = hierarchy if "uiautomator dump" in command else ""
         kwargs["stdout"].write(value.encode())
         return type("Result", (), {"returncode": 0})()
 
@@ -371,7 +372,7 @@ def test_ui_selector_falls_back_to_regular_xml_file(monkeypatch):
 
     assert result["bounds"] == "[10,20][110,80]"
     command_text = "\n".join(" ".join(call) for call in calls)
-    assert "cat /sdcard/autoglm-window.xml" in command_text
+    assert "uiautomator dump /sdcard/autoglm-window-3-" in command_text
     assert "input tap 60 50" in command_text
     assert "adb" not in command_text.lower()
 
@@ -558,6 +559,48 @@ def test_check_ui_returns_ready_from_one_complete_snapshot(monkeypatch):
         "required_matches": 1,
         "dismissed": 0,
     }
+    assert not any("input tap" in " ".join(call) for call in calls)
+
+
+def test_check_ui_reads_detached_dump_after_manager_timeout(monkeypatch):
+    page = """<hierarchy>
+      <node text="添加标题" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="添加作品描述" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="发布笔记" class="android.widget.Button" package="com.xingin.xhs" clickable="true" enabled="true" />
+    </hierarchy>"""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        command = " ".join(cmd)
+        if "uiautomator dump" in command:
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+        if "while [" in command:
+            kwargs["stdout"].write(page.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.check_ui(
+        class_name="android.widget.EditText",
+        package_name="com.xingin.xhs",
+        minimum_matches=2,
+        clickable=True,
+        enabled=True,
+        required_text="发布笔记",
+        required_class_name="android.widget.Button",
+        required_clickable=True,
+        required_enabled=True,
+    )
+
+    assert result["ready"] is True
+    assert any(
+        "uiautomator dump /sdcard/autoglm-window-3-" in " ".join(call)
+        and " 2>&1) &" in " ".join(call)
+        for call in calls
+    )
+    assert any("while [" in " ".join(call) for call in calls)
     assert not any("input tap" in " ".join(call) for call in calls)
 
 
