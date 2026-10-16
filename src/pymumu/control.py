@@ -1,12 +1,8 @@
-import base64
 import re
 import subprocess
-import threading
 import time
 from urllib.parse import urlsplit
-from xml.etree import ElementTree
 
-from .exception import MuMuException
 from .windows_input import (
     get_instance_window,
     get_render_window,
@@ -19,8 +15,6 @@ from .windows_input import (
 class ControlMixin:
     _RENDER_WINDOW_WAIT_TIMEOUT = 10.0
     _RENDER_WINDOW_POLL_INTERVAL = 0.2
-    _UI_DUMP_LOCKS = {}
-    _UI_DUMP_LOCKS_GUARD = threading.Lock()
 
     def _instance_window(self, index=None, refresh=False):
         idx = index if index is not None else self.index
@@ -141,411 +135,43 @@ class ControlMixin:
             # only that CLI process; the launched Android activity keeps running.
             return {"dispatched": True, "manager_cli_timed_out": True}
 
-    @staticmethod
-    def _ui_xml(value):
-        text = value if isinstance(value, str) else str(value or "")
-        start = text.find("<?xml")
-        if start < 0:
-            start = text.find("<hierarchy")
-        end = text.rfind("</hierarchy>")
-        if start >= 0 and end < start:
-            empty = re.match(r"<hierarchy\b[^>]*/>", text[start:])
-            if empty:
-                return empty.group(0)
-        if start < 0 or end < start:
-            raise RuntimeError("MuMu UI hierarchy is not ready")
-        return text[start : end + len("</hierarchy>")]
-
-    def _dump_ui_xml(self, index=None):
-        """Read Android's UI hierarchy through MuMuManager's command channel."""
+    def is_process_running(self, package: str, index=None):
+        """Check an Android package process through MuMuManager, without ADB."""
+        if not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+", package):
+            raise ValueError("Invalid Android package name")
         idx = index if index is not None else self.index
-        lock_key = (self.path, idx)
-        with self._UI_DUMP_LOCKS_GUARD:
-            dump_lock = self._UI_DUMP_LOCKS.setdefault(lock_key, threading.Lock())
-
-        filename = f"autoglm-window-{idx}-{time.monotonic_ns()}.xml"
-        android_dir = "/sdcard/Download/AutoGLM/UI"
-        android_path = f"{android_dir}/{filename}"
-        android_temp_path = f"{android_path}.tmp"
-
-        with dump_lock:
-            # Old dump processes can hold UIAutomator's accessibility connection
-            # forever. Kill only that Android process before starting one new
-            # collection. The command still travels exclusively via MuMuManager.
-            try:
-                self.tool_command(
-                    "toybox pkill -f '[c]om.android.commands.uiautomator' "
-                    ">/dev/null 2>&1 || true",
-                    index=idx,
-                    timeout=3,
-                )
-            except (MuMuException, subprocess.TimeoutExpired):
-                pass
-
-            manager_error = None
-            launch_output = ""
-            try:
-                launch_output = self.tool_command(
-                    f"mkdir -p {android_dir}; "
-                    f"rm -f {android_temp_path} {android_path}; "
-                    "toybox timeout -s KILL 12 "
-                    f"uiautomator dump --compressed {android_temp_path} "
-                    f">/dev/null 2>&1 && mv {android_temp_path} {android_path}",
-                    index=idx,
-                    timeout=15,
-                )
-            except (MuMuException, subprocess.TimeoutExpired) as error:
-                # MuMuManager sometimes fails to return even though Android has
-                # completed the dump. Continue by reading the completed file.
-                manager_error = error
-
-            try:
-                try:
-                    return self._ui_xml(launch_output)
-                except RuntimeError:
-                    pass
-
-                try:
-                    xml = self._read_ui_xml_chunks(android_path, index=idx)
-                    return self._ui_xml(xml)
-                except (MuMuException, RuntimeError, subprocess.TimeoutExpired) as error:
-                    detail = error or manager_error
-                    raise RuntimeError(f"MuMu UI hierarchy export failed: {detail}") from error
-            finally:
-                try:
-                    self.tool_command(
-                        f"rm -f {android_temp_path} {android_path}",
-                        index=idx,
-                        timeout=3,
-                    )
-                except (MuMuException, subprocess.TimeoutExpired):
-                    pass
-
-    def _read_ui_xml_chunks(self, android_path, *, index):
-        """Read one Android file in bounded chunks through MuMuManager."""
-        size_output = self.tool_command(
-            f"if [ -s {android_path} ]; then wc -c < {android_path}; else echo 0; fi",
-            index=index,
-            timeout=4,
+        running_marker = "__PYMUMU_PROCESS_RUNNING__"
+        stopped_marker = "__PYMUMU_PROCESS_STOPPED__"
+        output = self.tool_command(
+            f"if pidof {package} >/dev/null 2>&1; then "
+            f"echo {running_marker}; else echo {stopped_marker}; fi",
+            index=idx,
+            timeout=5,
         )
-        size_match = re.search(r"\d+", str(size_output or ""))
-        size = int(size_match.group(0)) if size_match else 0
-        if size <= 0:
-            raise RuntimeError("UI hierarchy file was not created by Android")
-        if size > 4 * 1024 * 1024:
-            raise RuntimeError(f"UI hierarchy file is unexpectedly large: {size} bytes")
+        result = str(output or "")
+        if running_marker in result:
+            running = True
+        elif stopped_marker in result:
+            running = False
+        else:
+            raise RuntimeError("MuMu did not return the Android process state")
+        return {"package": package, "running": running}
 
-        chunk_size = 8 * 1024
-        chunks = []
-        for chunk_index in range((size + chunk_size - 1) // chunk_size):
-            encoded = self.tool_command(
-                f"dd if={android_path} bs={chunk_size} skip={chunk_index} count=1 "
-                "2>/dev/null | base64",
-                index=index,
-                timeout=6,
-            )
-            compact = re.sub(r"\s+", "", str(encoded or ""))
-            if not compact:
-                raise RuntimeError(f"UI hierarchy chunk {chunk_index} is empty")
-            try:
-                chunks.append(base64.b64decode(compact, validate=True))
-            except ValueError as error:
-                raise RuntimeError(
-                    f"UI hierarchy chunk {chunk_index} is not valid Base64"
-                ) from error
-        data = b"".join(chunks)
-        if len(data) != size:
+    def screen_size(self, index=None):
+        """Read Android's effective screen size through MuMuManager, without ADB."""
+        idx = index if index is not None else self.index
+        output = str(self.tool_command("wm size", index=idx, timeout=5) or "")
+        override = re.search(r"Override size:\s*(\d+)x(\d+)", output, re.IGNORECASE)
+        physical = re.search(r"Physical size:\s*(\d+)x(\d+)", output, re.IGNORECASE)
+        match = override or physical or re.search(r"\b(\d+)x(\d+)\b", output)
+        if not match:
             raise RuntimeError(
-                f"UI hierarchy size changed while reading: expected {size}, got {len(data)}"
+                f"Unable to parse MuMu screen size: {output.strip() or 'empty output'}"
             )
-        return data.decode("utf-8", errors="replace")
-
-    @staticmethod
-    def _matching_ui_nodes(
-        root,
-        *,
-        text=None,
-        text_contains=None,
-        resource_id=None,
-        class_name=None,
-        package_name=None,
-        clickable=None,
-        enabled=None,
-    ):
-        matches = []
-        for node in root.iter("node"):
-            attributes = node.attrib
-            node_text = attributes.get("text", "")
-            if text is not None and node_text != text:
-                continue
-            if text_contains is not None and text_contains not in node_text:
-                continue
-            if resource_id and attributes.get("resource-id") != resource_id:
-                continue
-            if class_name and attributes.get("class") != class_name:
-                continue
-            if package_name and attributes.get("package") != package_name:
-                continue
-            if clickable is not None and attributes.get("clickable") != str(clickable).lower():
-                continue
-            if enabled is not None and attributes.get("enabled") != str(enabled).lower():
-                continue
-            matches.append(node)
-        return matches
-
-    def find_and_tap(
-        self,
-        *,
-        text: str | None = None,
-        text_contains: str | None = None,
-        resource_id: str | None = None,
-        class_name: str | None = None,
-        package_name: str | None = None,
-        selector_index: int = 0,
-        clickable: bool | None = None,
-        enabled: bool | None = None,
-        required_text: str | None = None,
-        required_text_contains: str | None = None,
-        timeout_ms: int = 30000,
-        optional: bool = False,
-        wait_until_focused: bool = False,
-        wait_until_gone: bool = False,
-        index=None,
-    ):
-        """Wait for one Android UI node and tap its center through MuMuManager."""
-        if not any((text, text_contains, resource_id, class_name, package_name)):
-            raise ValueError("At least one UI selector is required")
-        if selector_index < 0:
-            raise ValueError("selector_index must be non-negative")
-        idx = index if index is not None else self.index
-        deadline = time.monotonic() + max(0, timeout_ms) / 1000
-        last_error = "element not found"
-
-        def find(root):
-            if required_text is not None or required_text_contains is not None:
-                guards = self._matching_ui_nodes(
-                    root,
-                    text=required_text,
-                    text_contains=required_text_contains,
-                    package_name=package_name,
-                    enabled=True,
-                )
-                if not guards:
-                    return None
-            matches = self._matching_ui_nodes(
-                root,
-                text=text,
-                text_contains=text_contains,
-                resource_id=resource_id,
-                class_name=class_name,
-                package_name=package_name,
-                clickable=clickable,
-                enabled=enabled,
-            )
-            return matches[selector_index] if selector_index < len(matches) else None
-
-        while True:
-            try:
-                root = ElementTree.fromstring(self._dump_ui_xml(index=idx))
-                node = find(root)
-                if node is not None:
-                    bounds = node.attrib.get("bounds", "")
-                    match = re.fullmatch(r"\[(\d+),(\d+)]\[(\d+),(\d+)]", bounds)
-                    if not match:
-                        raise RuntimeError("Matched UI element has invalid bounds")
-                    left, top, right, bottom = map(int, match.groups())
-                    self.tool_tap((left + right) // 2, (top + bottom) // 2, index=idx)
-                    if not wait_until_focused and not wait_until_gone:
-                        return {"text": node.attrib.get("text", ""), "bounds": bounds}
-                    while time.monotonic() < deadline:
-                        time.sleep(0.5)
-                        current = ElementTree.fromstring(self._dump_ui_xml(index=idx))
-                        current_node = find(current)
-                        if wait_until_gone and current_node is None:
-                            return {
-                                "text": node.attrib.get("text", ""),
-                                "bounds": bounds,
-                                "gone": True,
-                            }
-                        if (
-                            wait_until_focused
-                            and current_node is not None
-                            and current_node.attrib.get("focused") == "true"
-                        ):
-                            return {
-                                "text": current_node.attrib.get("text", ""),
-                                "bounds": current_node.attrib.get("bounds", bounds),
-                                "focused": True,
-                            }
-                    expected = text or text_contains or class_name or package_name
-                    state = "disappear" if wait_until_gone else "receive focus"
-                    raise RuntimeError(f"UI element did not {state}: {expected}")
-                expected = text or text_contains or class_name or package_name
-                last_error = f"UI element not found: {expected} (index {selector_index})"
-            except (
-                ElementTree.ParseError,
-                RuntimeError,
-                subprocess.TimeoutExpired,
-            ) as error:
-                last_error = str(error)
-            if time.monotonic() >= deadline:
-                if optional:
-                    return {"found": False}
-                raise RuntimeError(last_error)
-            time.sleep(0.5)
-
-    def wait_for_ui(
-        self,
-        *,
-        class_name: str,
-        package_name: str | None = None,
-        minimum_matches: int = 1,
-        clickable: bool | None = None,
-        enabled: bool | None = None,
-        required_text: str | None = None,
-        required_text_contains: str | None = None,
-        required_class_name: str | None = None,
-        required_clickable: bool | None = None,
-        required_enabled: bool | None = None,
-        dismiss_text: str | None = None,
-        dismiss_class_name: str | None = None,
-        dismiss_required_text: str | None = None,
-        timeout_ms: int = 30000,
-        index=None,
-    ):
-        """Wait for a compound UI signature without clicking any element."""
-        if minimum_matches < 1:
-            raise ValueError("minimum_matches must be positive")
-        deadline = time.monotonic() + max(0, timeout_ms) / 1000
-        last_counts = (0, 0)
-        dismissed = 0
-        while True:
-            result = self.check_ui(
-                class_name=class_name,
-                package_name=package_name,
-                minimum_matches=minimum_matches,
-                clickable=clickable,
-                enabled=enabled,
-                required_text=required_text,
-                required_text_contains=required_text_contains,
-                required_class_name=required_class_name,
-                required_clickable=required_clickable,
-                required_enabled=required_enabled,
-                dismiss_text=dismiss_text,
-                dismiss_class_name=dismiss_class_name,
-                dismiss_required_text=dismiss_required_text,
-                index=index,
-            )
-            dismissed += result["dismissed"]
-            last_counts = (result["matches"], result["required_matches"])
-            if result["ready"]:
-                return {**result, "dismissed": dismissed}
-            if time.monotonic() >= deadline:
-                raise RuntimeError(
-                    "UI signature not ready: "
-                    f"{last_counts[0]}/{minimum_matches} primary nodes, "
-                    f"{last_counts[1]} required nodes"
-                )
-            time.sleep(0.5)
-
-    def check_ui(
-        self,
-        *,
-        class_name: str,
-        package_name: str | None = None,
-        minimum_matches: int = 1,
-        clickable: bool | None = None,
-        enabled: bool | None = None,
-        required_text: str | None = None,
-        required_text_contains: str | None = None,
-        required_class_name: str | None = None,
-        required_clickable: bool | None = None,
-        required_enabled: bool | None = None,
-        dismiss_text: str | None = None,
-        dismiss_class_name: str | None = None,
-        dismiss_required_text: str | None = None,
-        index=None,
-    ):
-        """Check one UI snapshot and optionally dismiss one matching dialog."""
-        if minimum_matches < 1:
-            raise ValueError("minimum_matches must be positive")
-        idx = index if index is not None else self.index
-        try:
-            root = ElementTree.fromstring(self._dump_ui_xml(index=idx))
-            if dismiss_text and dismiss_required_text:
-                dismiss_guards = self._matching_ui_nodes(
-                    root,
-                    text=dismiss_required_text,
-                    package_name=package_name,
-                    enabled=True,
-                )
-                dismiss_nodes = self._matching_ui_nodes(
-                    root,
-                    text=dismiss_text,
-                    class_name=dismiss_class_name,
-                    package_name=package_name,
-                    clickable=True,
-                    enabled=True,
-                )
-                if dismiss_guards and dismiss_nodes:
-                    bounds = dismiss_nodes[0].attrib.get("bounds", "")
-                    match = re.fullmatch(
-                        r"\[(\d+),(\d+)]\[(\d+),(\d+)]", bounds
-                    )
-                    if not match:
-                        raise RuntimeError("Dismiss UI element has invalid bounds")
-                    left, top, right, bottom = map(int, match.groups())
-                    self.tool_tap(
-                        (left + right) // 2,
-                        (top + bottom) // 2,
-                        index=idx,
-                    )
-                    return {
-                        "ready": False,
-                        "matches": 0,
-                        "required_matches": 0,
-                        "dismissed": 1,
-                    }
-            primary = self._matching_ui_nodes(
-                root,
-                class_name=class_name,
-                package_name=package_name,
-                clickable=clickable,
-                enabled=enabled,
-            )
-            guards = self._matching_ui_nodes(
-                root,
-                text=required_text,
-                text_contains=required_text_contains,
-                class_name=required_class_name,
-                package_name=package_name,
-                clickable=required_clickable,
-                enabled=required_enabled,
-            )
-            guard_ready = (
-                required_text is None
-                and required_text_contains is None
-                and required_class_name is None
-            ) or bool(guards)
-            return {
-                "ready": len(primary) >= minimum_matches and guard_ready,
-                "matches": len(primary),
-                "required_matches": len(guards),
-                "dismissed": 0,
-            }
-        except (
-            ElementTree.ParseError,
-            MuMuException,
-            RuntimeError,
-            subprocess.TimeoutExpired,
-        ) as error:
-            return {
-                "ready": False,
-                "matches": 0,
-                "required_matches": 0,
-                "dismissed": 0,
-                "error": str(error),
-            }
+        width, height = map(int, match.groups())
+        if width <= 0 or height <= 0:
+            raise RuntimeError("MuMu returned an invalid screen size")
+        return {"width": width, "height": height}
 
     def tool_tap(
         self,

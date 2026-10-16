@@ -39,9 +39,8 @@ class ControlRequest(BaseModel):
         "close_app",
         "prepare",
         "open_url",
-        "find_and_tap",
-        "check_ui",
-        "wait_for_ui",
+        "is_process_running",
+        "screen_size",
     ]
     x: int | None = Field(default=None, ge=0, le=10000)
     y: int | None = Field(default=None, ge=0, le=10000)
@@ -56,27 +55,6 @@ class ControlRequest(BaseModel):
     key: str | None = None
     package: str | None = None
     url: str | None = Field(default=None, max_length=4096)
-    selector_text: str | None = Field(default=None, max_length=200)
-    text_contains: str | None = Field(default=None, max_length=200)
-    resource_id: str | None = Field(default=None, max_length=300)
-    class_name: str | None = Field(default=None, max_length=300)
-    package_name: str | None = Field(default=None, max_length=300)
-    selector_index: int = Field(default=0, ge=0, le=100)
-    clickable: bool | None = None
-    enabled: bool | None = None
-    required_text: str | None = Field(default=None, max_length=300)
-    required_text_contains: str | None = Field(default=None, max_length=300)
-    required_class_name: str | None = Field(default=None, max_length=300)
-    required_clickable: bool | None = None
-    required_enabled: bool | None = None
-    dismiss_text: str | None = Field(default=None, max_length=300)
-    dismiss_class_name: str | None = Field(default=None, max_length=300)
-    dismiss_required_text: str | None = Field(default=None, max_length=300)
-    minimum_matches: int = Field(default=1, ge=1, le=100)
-    timeout_ms: int = Field(default=30000, ge=0, le=120000)
-    optional: bool = False
-    wait_until_focused: bool = False
-    wait_until_gone: bool = False
 
 
 def _required(value: Any, name: str) -> Any:
@@ -174,43 +152,10 @@ def create_router(
                 current_packages[index] = package
             elif action == "open_url":
                 result = mumu.open_url(_required(request.url, "url"))
-            elif action == "find_and_tap":
-                result = mumu.find_and_tap(
-                    text=request.selector_text,
-                    text_contains=request.text_contains,
-                    resource_id=request.resource_id,
-                    class_name=request.class_name,
-                    package_name=request.package_name,
-                    selector_index=request.selector_index,
-                    clickable=request.clickable,
-                    enabled=request.enabled,
-                    required_text=request.required_text,
-                    required_text_contains=request.required_text_contains,
-                    timeout_ms=request.timeout_ms,
-                    optional=request.optional,
-                    wait_until_focused=request.wait_until_focused,
-                    wait_until_gone=request.wait_until_gone,
-                )
-            elif action in {"check_ui", "wait_for_ui"}:
-                method = mumu.check_ui if action == "check_ui" else mumu.wait_for_ui
-                arguments = {
-                    "class_name": _required(request.class_name, "class_name"),
-                    "package_name": request.package_name,
-                    "minimum_matches": request.minimum_matches,
-                    "clickable": request.clickable,
-                    "enabled": request.enabled,
-                    "required_text": request.required_text,
-                    "required_text_contains": request.required_text_contains,
-                    "required_class_name": request.required_class_name,
-                    "required_clickable": request.required_clickable,
-                    "required_enabled": request.required_enabled,
-                    "dismiss_text": request.dismiss_text,
-                    "dismiss_class_name": request.dismiss_class_name,
-                    "dismiss_required_text": request.dismiss_required_text,
-                }
-                if action == "wait_for_ui":
-                    arguments["timeout_ms"] = request.timeout_ms
-                result = method(**arguments)
+            elif action == "is_process_running":
+                result = mumu.is_process_running(_required(request.package, "package"))
+            elif action == "screen_size":
+                result = mumu.screen_size()
             else:
                 package = _required(request.package, "package")
                 result = mumu.app_close(package)
