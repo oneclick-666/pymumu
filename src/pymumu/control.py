@@ -4,6 +4,7 @@ import time
 from urllib.parse import urlsplit
 from xml.etree import ElementTree
 
+from .exception import MuMuException
 from .windows_input import (
     get_instance_window,
     get_render_window,
@@ -327,79 +328,30 @@ class ControlMixin:
         """Wait for a compound UI signature without clicking any element."""
         if minimum_matches < 1:
             raise ValueError("minimum_matches must be positive")
-        idx = index if index is not None else self.index
         deadline = time.monotonic() + max(0, timeout_ms) / 1000
         last_counts = (0, 0)
         dismissed = 0
         while True:
-            try:
-                root = ElementTree.fromstring(self._dump_ui_xml(index=idx))
-                if dismiss_text and dismiss_required_text:
-                    dismiss_guards = self._matching_ui_nodes(
-                        root,
-                        text=dismiss_required_text,
-                        package_name=package_name,
-                        enabled=True,
-                    )
-                    dismiss_nodes = self._matching_ui_nodes(
-                        root,
-                        text=dismiss_text,
-                        class_name=dismiss_class_name,
-                        package_name=package_name,
-                        clickable=True,
-                        enabled=True,
-                    )
-                    if dismiss_guards and dismiss_nodes:
-                        bounds = dismiss_nodes[0].attrib.get("bounds", "")
-                        match = re.fullmatch(
-                            r"\[(\d+),(\d+)]\[(\d+),(\d+)]", bounds
-                        )
-                        if not match:
-                            raise RuntimeError("Dismiss UI element has invalid bounds")
-                        left, top, right, bottom = map(int, match.groups())
-                        self.tool_tap(
-                            (left + right) // 2,
-                            (top + bottom) // 2,
-                            index=idx,
-                        )
-                        dismissed += 1
-                        time.sleep(0.5)
-                        continue
-                primary = self._matching_ui_nodes(
-                    root,
-                    class_name=class_name,
-                    package_name=package_name,
-                    clickable=clickable,
-                    enabled=enabled,
-                )
-                guards = self._matching_ui_nodes(
-                    root,
-                    text=required_text,
-                    text_contains=required_text_contains,
-                    class_name=required_class_name,
-                    package_name=package_name,
-                    clickable=required_clickable,
-                    enabled=required_enabled,
-                )
-                last_counts = (len(primary), len(guards))
-                guard_ready = (
-                    required_text is None
-                    and required_text_contains is None
-                    and required_class_name is None
-                ) or bool(guards)
-                if len(primary) >= minimum_matches and guard_ready:
-                    return {
-                        "ready": True,
-                        "matches": len(primary),
-                        "required_matches": len(guards),
-                        "dismissed": dismissed,
-                    }
-            except (
-                ElementTree.ParseError,
-                RuntimeError,
-                subprocess.TimeoutExpired,
-            ):
-                pass
+            result = self.check_ui(
+                class_name=class_name,
+                package_name=package_name,
+                minimum_matches=minimum_matches,
+                clickable=clickable,
+                enabled=enabled,
+                required_text=required_text,
+                required_text_contains=required_text_contains,
+                required_class_name=required_class_name,
+                required_clickable=required_clickable,
+                required_enabled=required_enabled,
+                dismiss_text=dismiss_text,
+                dismiss_class_name=dismiss_class_name,
+                dismiss_required_text=dismiss_required_text,
+                index=index,
+            )
+            dismissed += result["dismissed"]
+            last_counts = (result["matches"], result["required_matches"])
+            if result["ready"]:
+                return {**result, "dismissed": dismissed}
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     "UI signature not ready: "
@@ -407,6 +359,105 @@ class ControlMixin:
                     f"{last_counts[1]} required nodes"
                 )
             time.sleep(0.5)
+
+    def check_ui(
+        self,
+        *,
+        class_name: str,
+        package_name: str | None = None,
+        minimum_matches: int = 1,
+        clickable: bool | None = None,
+        enabled: bool | None = None,
+        required_text: str | None = None,
+        required_text_contains: str | None = None,
+        required_class_name: str | None = None,
+        required_clickable: bool | None = None,
+        required_enabled: bool | None = None,
+        dismiss_text: str | None = None,
+        dismiss_class_name: str | None = None,
+        dismiss_required_text: str | None = None,
+        index=None,
+    ):
+        """Check one UI snapshot and optionally dismiss one matching dialog."""
+        if minimum_matches < 1:
+            raise ValueError("minimum_matches must be positive")
+        idx = index if index is not None else self.index
+        try:
+            root = ElementTree.fromstring(self._dump_ui_xml(index=idx))
+            if dismiss_text and dismiss_required_text:
+                dismiss_guards = self._matching_ui_nodes(
+                    root,
+                    text=dismiss_required_text,
+                    package_name=package_name,
+                    enabled=True,
+                )
+                dismiss_nodes = self._matching_ui_nodes(
+                    root,
+                    text=dismiss_text,
+                    class_name=dismiss_class_name,
+                    package_name=package_name,
+                    clickable=True,
+                    enabled=True,
+                )
+                if dismiss_guards and dismiss_nodes:
+                    bounds = dismiss_nodes[0].attrib.get("bounds", "")
+                    match = re.fullmatch(
+                        r"\[(\d+),(\d+)]\[(\d+),(\d+)]", bounds
+                    )
+                    if not match:
+                        raise RuntimeError("Dismiss UI element has invalid bounds")
+                    left, top, right, bottom = map(int, match.groups())
+                    self.tool_tap(
+                        (left + right) // 2,
+                        (top + bottom) // 2,
+                        index=idx,
+                    )
+                    return {
+                        "ready": False,
+                        "matches": 0,
+                        "required_matches": 0,
+                        "dismissed": 1,
+                    }
+            primary = self._matching_ui_nodes(
+                root,
+                class_name=class_name,
+                package_name=package_name,
+                clickable=clickable,
+                enabled=enabled,
+            )
+            guards = self._matching_ui_nodes(
+                root,
+                text=required_text,
+                text_contains=required_text_contains,
+                class_name=required_class_name,
+                package_name=package_name,
+                clickable=required_clickable,
+                enabled=required_enabled,
+            )
+            guard_ready = (
+                required_text is None
+                and required_text_contains is None
+                and required_class_name is None
+            ) or bool(guards)
+            return {
+                "ready": len(primary) >= minimum_matches and guard_ready,
+                "matches": len(primary),
+                "required_matches": len(guards),
+                "dismissed": 0,
+            }
+        except (
+            ElementTree.ParseError,
+            MuMuException,
+            RuntimeError,
+            subprocess.TimeoutExpired,
+        ) as error:
+            return {
+                "ready": False,
+                "matches": 0,
+                "required_matches": 0,
+                "dismissed": 0,
+                "error": str(error),
+            }
 
     def tool_tap(
         self,

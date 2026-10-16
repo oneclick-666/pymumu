@@ -40,6 +40,7 @@ class ControlRequest(BaseModel):
         "prepare",
         "open_url",
         "find_and_tap",
+        "check_ui",
         "wait_for_ui",
     ]
     x: int | None = Field(default=None, ge=0, le=10000)
@@ -190,23 +191,26 @@ def create_router(
                     wait_until_focused=request.wait_until_focused,
                     wait_until_gone=request.wait_until_gone,
                 )
-            elif action == "wait_for_ui":
-                result = mumu.wait_for_ui(
-                    class_name=_required(request.class_name, "class_name"),
-                    package_name=request.package_name,
-                    minimum_matches=request.minimum_matches,
-                    clickable=request.clickable,
-                    enabled=request.enabled,
-                    required_text=request.required_text,
-                    required_text_contains=request.required_text_contains,
-                    required_class_name=request.required_class_name,
-                    required_clickable=request.required_clickable,
-                    required_enabled=request.required_enabled,
-                    dismiss_text=request.dismiss_text,
-                    dismiss_class_name=request.dismiss_class_name,
-                    dismiss_required_text=request.dismiss_required_text,
-                    timeout_ms=request.timeout_ms,
-                )
+            elif action in {"check_ui", "wait_for_ui"}:
+                method = mumu.check_ui if action == "check_ui" else mumu.wait_for_ui
+                arguments = {
+                    "class_name": _required(request.class_name, "class_name"),
+                    "package_name": request.package_name,
+                    "minimum_matches": request.minimum_matches,
+                    "clickable": request.clickable,
+                    "enabled": request.enabled,
+                    "required_text": request.required_text,
+                    "required_text_contains": request.required_text_contains,
+                    "required_class_name": request.required_class_name,
+                    "required_clickable": request.required_clickable,
+                    "required_enabled": request.required_enabled,
+                    "dismiss_text": request.dismiss_text,
+                    "dismiss_class_name": request.dismiss_class_name,
+                    "dismiss_required_text": request.dismiss_required_text,
+                }
+                if action == "wait_for_ui":
+                    arguments["timeout_ms"] = request.timeout_ms
+                result = method(**arguments)
             else:
                 package = _required(request.package, "package")
                 result = mumu.app_close(package)

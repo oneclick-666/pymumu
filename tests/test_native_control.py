@@ -523,6 +523,121 @@ def test_wait_for_ui_dismisses_late_permission_popup(monkeypatch):
     assert any("input tap 453 2425" in " ".join(call) for call in calls)
 
 
+def test_check_ui_returns_ready_from_one_complete_snapshot(monkeypatch):
+    page = """<hierarchy>
+      <node text="添加标题" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="添加作品描述" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="发布笔记" class="android.widget.Button" package="com.xingin.xhs" clickable="true" enabled="true" />
+    </hierarchy>"""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "uiautomator dump" in " ".join(cmd):
+            kwargs["stdout"].write(page.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.check_ui(
+        class_name="android.widget.EditText",
+        package_name="com.xingin.xhs",
+        minimum_matches=2,
+        clickable=True,
+        enabled=True,
+        required_text="发布笔记",
+        required_class_name="android.widget.Button",
+        required_clickable=True,
+        required_enabled=True,
+    )
+
+    assert result == {
+        "ready": True,
+        "matches": 2,
+        "required_matches": 1,
+        "dismissed": 0,
+    }
+    assert not any("input tap" in " ".join(call) for call in calls)
+
+
+def test_check_ui_returns_not_ready_for_incomplete_snapshot(monkeypatch):
+    incomplete = """<hierarchy>
+      <node text="添加标题" class="android.widget.EditText" package="com.xingin.xhs" clickable="true" enabled="true" />
+      <node text="发布笔记" class="android.widget.Button" package="com.xingin.xhs" clickable="true" enabled="true" />
+    </hierarchy>"""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "uiautomator dump" in " ".join(cmd):
+            kwargs["stdout"].write(incomplete.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.check_ui(
+        class_name="android.widget.EditText",
+        package_name="com.xingin.xhs",
+        minimum_matches=2,
+        clickable=True,
+        enabled=True,
+        required_text="发布笔记",
+        required_class_name="android.widget.Button",
+        required_clickable=True,
+        required_enabled=True,
+    )
+
+    assert result == {
+        "ready": False,
+        "matches": 1,
+        "required_matches": 1,
+        "dismissed": 0,
+    }
+    assert not any("input tap" in " ".join(call) for call in calls)
+
+
+def test_check_ui_dismisses_matching_permission_popup_once(monkeypatch):
+    popup = """<hierarchy>
+      <node text="申请获取您的相册内容位置信息" class="android.widget.TextView" package="com.xingin.xhs" enabled="true" />
+      <node text="取消" class="android.widget.TextView" package="com.xingin.xhs" clickable="true" enabled="true" bounds="[204,2365][702,2485]" />
+    </hierarchy>"""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "uiautomator dump" in " ".join(cmd):
+            kwargs["stdout"].write(popup.encode())
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr("pymumu.utils.subprocess.run", fake_run)
+    mumu = PyMumu(path=r"C:\MuMu\MumuManager.exe", index=3)
+
+    result = mumu.check_ui(
+        class_name="android.widget.EditText",
+        package_name="com.xingin.xhs",
+        minimum_matches=2,
+        clickable=True,
+        enabled=True,
+        required_text="发布笔记",
+        required_class_name="android.widget.Button",
+        required_clickable=True,
+        required_enabled=True,
+        dismiss_text="取消",
+        dismiss_class_name="android.widget.TextView",
+        dismiss_required_text="申请获取您的相册内容位置信息",
+    )
+
+    assert result == {
+        "ready": False,
+        "matches": 0,
+        "required_matches": 0,
+        "dismissed": 1,
+    }
+    assert sum("input tap 453 2425" in " ".join(call) for call in calls) == 1
+
+
 def test_optional_popup_cancel_requires_matching_dialog_title(monkeypatch):
     unrelated = """<hierarchy>
       <node text="其他弹窗" class="android.widget.TextView" package="com.xingin.xhs" enabled="true" bounds="[0,0][100,50]" />
