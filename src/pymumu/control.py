@@ -1,5 +1,7 @@
+import base64
 import re
 import subprocess
+import threading
 import time
 from urllib.parse import urlsplit
 from xml.etree import ElementTree
@@ -17,6 +19,8 @@ from .windows_input import (
 class ControlMixin:
     _RENDER_WINDOW_WAIT_TIMEOUT = 10.0
     _RENDER_WINDOW_POLL_INTERVAL = 0.2
+    _UI_DUMP_LOCKS = {}
+    _UI_DUMP_LOCKS_GUARD = threading.Lock()
 
     def _instance_window(self, index=None, refresh=False):
         idx = index if index is not None else self.index
@@ -155,37 +159,106 @@ class ControlMixin:
     def _dump_ui_xml(self, index=None):
         """Read Android's UI hierarchy through MuMuManager's command channel."""
         idx = index if index is not None else self.index
-        # MuMuManager can keep a foreground `uiautomator dump` command alive
-        # after Android has started producing the hierarchy. Launch exactly one
-        # detached dump, then read its uniquely named result through a separate
-        # native command. Avoiding a preceding /dev/tty dump also prevents an
-        # orphaned first process from blocking the file-producing process.
-        path = f"/sdcard/autoglm-window-{idx}-{time.monotonic_ns()}.xml"
-        launch_output = ""
-        try:
-            launch_output = self.tool_command(
-                f"rm -f {path}; "
-                f"(uiautomator dump {path} </dev/null >/dev/null 2>&1) &",
-                index=idx,
-                timeout=2,
+        lock_key = (self.path, idx)
+        with self._UI_DUMP_LOCKS_GUARD:
+            dump_lock = self._UI_DUMP_LOCKS.setdefault(lock_key, threading.Lock())
+
+        filename = f"autoglm-window-{idx}-{time.monotonic_ns()}.xml"
+        android_dir = "/sdcard/Download/AutoGLM/UI"
+        android_path = f"{android_dir}/{filename}"
+        android_temp_path = f"{android_path}.tmp"
+
+        with dump_lock:
+            # Old dump processes can hold UIAutomator's accessibility connection
+            # forever. Kill only that Android process before starting one new
+            # collection. The command still travels exclusively via MuMuManager.
+            try:
+                self.tool_command(
+                    "toybox pkill -f '[c]om.android.commands.uiautomator' "
+                    ">/dev/null 2>&1 || true",
+                    index=idx,
+                    timeout=3,
+                )
+            except (MuMuException, subprocess.TimeoutExpired):
+                pass
+
+            manager_error = None
+            launch_output = ""
+            try:
+                launch_output = self.tool_command(
+                    f"mkdir -p {android_dir}; "
+                    f"rm -f {android_temp_path} {android_path}; "
+                    "toybox timeout -s KILL 12 "
+                    f"uiautomator dump --compressed {android_temp_path} "
+                    f">/dev/null 2>&1 && mv {android_temp_path} {android_path}",
+                    index=idx,
+                    timeout=15,
+                )
+            except (MuMuException, subprocess.TimeoutExpired) as error:
+                # MuMuManager sometimes fails to return even though Android has
+                # completed the dump. Continue by reading the completed file.
+                manager_error = error
+
+            try:
+                try:
+                    return self._ui_xml(launch_output)
+                except RuntimeError:
+                    pass
+
+                try:
+                    xml = self._read_ui_xml_chunks(android_path, index=idx)
+                    return self._ui_xml(xml)
+                except (MuMuException, RuntimeError, subprocess.TimeoutExpired) as error:
+                    detail = error or manager_error
+                    raise RuntimeError(f"MuMu UI hierarchy export failed: {detail}") from error
+            finally:
+                try:
+                    self.tool_command(
+                        f"rm -f {android_temp_path} {android_path}",
+                        index=idx,
+                        timeout=3,
+                    )
+                except (MuMuException, subprocess.TimeoutExpired):
+                    pass
+
+    def _read_ui_xml_chunks(self, android_path, *, index):
+        """Read one Android file in bounded chunks through MuMuManager."""
+        size_output = self.tool_command(
+            f"if [ -s {android_path} ]; then wc -c < {android_path}; else echo 0; fi",
+            index=index,
+            timeout=4,
+        )
+        size_match = re.search(r"\d+", str(size_output or ""))
+        size = int(size_match.group(0)) if size_match else 0
+        if size <= 0:
+            raise RuntimeError("UI hierarchy file was not created by Android")
+        if size > 4 * 1024 * 1024:
+            raise RuntimeError(f"UI hierarchy file is unexpectedly large: {size} bytes")
+
+        chunk_size = 8 * 1024
+        chunks = []
+        for chunk_index in range((size + chunk_size - 1) // chunk_size):
+            encoded = self.tool_command(
+                f"dd if={android_path} bs={chunk_size} skip={chunk_index} count=1 "
+                "2>/dev/null | base64",
+                index=index,
+                timeout=6,
             )
-        except (MuMuException, subprocess.TimeoutExpired):
-            # The detached Android command can continue after its manager
-            # wrapper is terminated, so still try to read the result.
-            pass
-        try:
-            return self._ui_xml(launch_output)
-        except RuntimeError:
-            output = self.tool_command(
-                "i=0; "
-                f"while [ \"$i\" -lt 10 ]; do "
-                f"if [ -s {path} ]; then cat {path}; rm -f {path}; exit 0; fi; "
-                "sleep 1; i=$((i + 1)); done; "
-                f"rm -f {path}; exit 1",
-                index=idx,
-                timeout=12,
+            compact = re.sub(r"\s+", "", str(encoded or ""))
+            if not compact:
+                raise RuntimeError(f"UI hierarchy chunk {chunk_index} is empty")
+            try:
+                chunks.append(base64.b64decode(compact, validate=True))
+            except ValueError as error:
+                raise RuntimeError(
+                    f"UI hierarchy chunk {chunk_index} is not valid Base64"
+                ) from error
+        data = b"".join(chunks)
+        if len(data) != size:
+            raise RuntimeError(
+                f"UI hierarchy size changed while reading: expected {size}, got {len(data)}"
             )
-            return self._ui_xml(output)
+        return data.decode("utf-8", errors="replace")
 
     @staticmethod
     def _matching_ui_nodes(
